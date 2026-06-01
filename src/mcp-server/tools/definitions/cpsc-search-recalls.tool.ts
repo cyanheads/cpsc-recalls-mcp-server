@@ -107,7 +107,9 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
                 z
                   .object({
                     name: z.string().describe('Product name.'),
-                    units: z.string().describe('Number of units recalled, e.g. "About 2,500".'),
+                    units_recalled: z
+                      .string()
+                      .describe('Estimated number of units recalled, e.g. "About 2,500".'),
                   })
                   .describe('A product covered by this recall.'),
               )
@@ -229,7 +231,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
         .join(' '),
       products: r.Products.map((p) => ({
         name: p.Name,
-        units: p.NumberOfUnits ?? '',
+        units_recalled: p.NumberOfUnits ?? '',
       })),
       upcs: r.ProductUPCs.map((u) => u.UPC).filter(Boolean),
       manufacturers: r.Manufacturers.map((m) => m.Name).filter(Boolean),
@@ -259,7 +261,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       lines.push(`**Remedy:** ${remedyTypes} — ${remedyText}`);
 
       const productNames = r.products
-        .map((p) => `${p.name} (${p.units || 'units not specified'})`)
+        .map((p) => `${p.name} (${p.units_recalled || 'units not specified'})`)
         .join(', ');
       lines.push(`**Products:** ${productNames || 'Not specified'}`);
 

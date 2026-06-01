@@ -157,7 +157,7 @@ describe('cpsc_search_recalls', () => {
           hazards: ['Fire hazard'],
           remedy_options: ['Refund'],
           remedy_summary: 'Contact ACME for a refund.',
-          products: [{ name: 'ACME Widget', units: 'About 5,000' }],
+          products: [{ name: 'ACME Widget', units_recalled: 'About 5,000' }],
           upcs: ['012345678901'],
           manufacturers: ['ACME Corp'],
           importers: [],

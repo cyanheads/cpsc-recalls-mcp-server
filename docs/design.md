@@ -181,7 +181,7 @@ z.object({
       .describe('Full remedy instructions — what the consumer should do and how to claim.'),
     products: z.array(z.object({
       name: z.string().describe('Product name.'),
-      units: z.string().describe('Number of units recalled, e.g. "About 2,500".'),
+      units_recalled: z.string().describe('Estimated number of units recalled, e.g. "About 2,500".'),
       upcs: z.array(z.string()).describe('UPC codes associated with this recall (sparse — ~4% of records). Note: UPCs are stored at the recall level in the API, not per-product; when a recall covers multiple products, all UPCs apply to the recall as a whole.'),
     })).describe('Products covered by this recall.'),
     manufacturers: z.array(z.string())
