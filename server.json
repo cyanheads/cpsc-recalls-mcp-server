@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/cpsc-recalls-mcp-server",
-  "description": "CPSC product recall data — hazards, remedies, affected products via MCP.",
+  "description": "US consumer product recalls from the CPSC — hazards, remedies, and affected products.",
   "repository": {
     "url": "https://github.com/cyanheads/cpsc-recalls-mcp-server",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/cpsc-recalls-mcp-server",
-      "runtimeHint": "node",
-      "version": "0.1.0",
+      "runtimeHint": "bun",
+      "version": "0.1.1",
       "packageArguments": [
         {
           "type": "positional",
@@ -41,8 +41,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/cpsc-recalls-mcp-server",
-      "runtimeHint": "node",
-      "version": "0.1.0",
+      "runtimeHint": "bun",
+      "version": "0.1.1",
       "packageArguments": [
         {
           "type": "positional",

@@ -1,26 +1,13 @@
 # Developer Protocol
 
 **Server:** cpsc-recalls-mcp-server
-**Version:** 0.1.0
+**Version:** 0.1.1
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.19`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
-
----
-
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. The framework, skills, and example definitions are in place — the domain isn't. The user's first messages will set direction; wait for them before proceeding.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
 
 ---
 
@@ -223,20 +210,16 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
-  config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
-  services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+  index.ts                              # createApp() entry point — registers tools, inits service
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
-    resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      cpsc-search-recalls.tool.ts       # Search recalls by product, org, date
+      cpsc-get-recall.tool.ts           # Full detail for a single recall by number
+      cpsc-get-recent.tool.ts           # Recent recalls feed (date window)
+  services/
+    cpsc-recall/
+      cpsc-recall-service.ts            # CPSC API client, init/accessor pattern
+      types.ts                          # Raw API and domain types
 ```
 
 ---
