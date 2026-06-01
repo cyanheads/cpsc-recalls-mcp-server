@@ -61,11 +61,23 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
           'Note: hazard keywords often appear in the Description field — this is the correct filter for hazard-type searching since the Hazard filter param is non-functional upstream.',
       ),
     date_start: z
-      .string()
+      .union([
+        z.literal(''),
+        z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .describe('ISO 8601 date: "YYYY-MM-DD".'),
+      ])
       .optional()
       .describe('Include only recalls on or after this date. ISO 8601 format: "YYYY-MM-DD".'),
     date_end: z
-      .string()
+      .union([
+        z.literal(''),
+        z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .describe('ISO 8601 date: "YYYY-MM-DD".'),
+      ])
       .optional()
       .describe('Include only recalls on or before this date. ISO 8601 format: "YYYY-MM-DD".'),
     limit: z
@@ -204,10 +216,12 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
         ctx,
       );
     } catch (err) {
-      throw ctx.fail('upstream_error', 'CPSC API request failed.', {
-        ...ctx.recoveryFor('upstream_error'),
-        cause: err,
-      });
+      throw ctx.fail(
+        'upstream_error',
+        'CPSC API request failed.',
+        { ...ctx.recoveryFor('upstream_error') },
+        { cause: err },
+      );
     }
 
     if (raw.length === 0) {

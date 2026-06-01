@@ -159,10 +159,12 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     try {
       raw = await svc.getByNumber(input.recall_number, ctx);
     } catch (err) {
-      throw ctx.fail('upstream_error', 'CPSC API request failed.', {
-        ...ctx.recoveryFor('upstream_error'),
-        cause: err,
-      });
+      throw ctx.fail(
+        'upstream_error',
+        'CPSC API request failed.',
+        { ...ctx.recoveryFor('upstream_error') },
+        { cause: err },
+      );
     }
 
     if (!raw) {
@@ -179,7 +181,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       description: raw.Description,
       cpsc_url: raw.URL,
       consumer_contact: raw.ConsumerContact,
-      hazards: raw.Hazards.map((h) => ({ description: h.Name })).filter((h) => h.description),
+      hazards: raw.Hazards.filter((h) => h.Name).map((h) => ({ description: h.Name })),
       remedy_options: raw.RemedyOptions.map((o) => o.Option).filter(Boolean),
       remedy_instructions: raw.Remedies.map((r) => r.Name)
         .filter(Boolean)

@@ -115,10 +115,12 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     try {
       raw = await svc.getRecent(dateStart, dateEnd, ctx);
     } catch (err) {
-      throw ctx.fail('upstream_error', 'CPSC API request failed.', {
-        ...ctx.recoveryFor('upstream_error'),
-        cause: err,
-      });
+      throw ctx.fail(
+        'upstream_error',
+        'CPSC API request failed.',
+        { ...ctx.recoveryFor('upstream_error') },
+        { cause: err },
+      );
     }
 
     const total_found = raw.length;
