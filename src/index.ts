@@ -5,17 +5,23 @@
  */
 
 import { createApp } from '@cyanheads/mcp-ts-core';
-import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
-import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
-import { echoAppUiResource } from './mcp-server/resources/definitions/echo-app-ui.app-resource.js';
-import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
-import { echoAppTool } from './mcp-server/tools/definitions/echo-app.app-tool.js';
+import { cpscGetRecall } from './mcp-server/tools/definitions/cpsc-get-recall.tool.js';
+import { cpscGetRecent } from './mcp-server/tools/definitions/cpsc-get-recent.tool.js';
+import { cpscSearchRecalls } from './mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
+import { initCpscRecallService } from './services/cpsc-recall/cpsc-recall-service.js';
 
 await createApp({
-  tools: [echoTool, echoAppTool],
-  resources: [echoResource, echoAppUiResource],
-  prompts: [echoPrompt],
-  // instructions: 'Server-level orientation forwarded to the model on every initialize.\n' +
-  //   '- Use shortcut `X` for the most common case\n' +
-  //   '- Tools require auth via the `inventory:read` scope',
+  tools: [cpscSearchRecalls, cpscGetRecall, cpscGetRecent],
+  resources: [],
+  prompts: [],
+  instructions:
+    'CPSC consumer product recall database (saferproducts.gov). ' +
+    'Use cpsc_search_recalls to find recalls by product, brand, hazard, or date. ' +
+    'Use cpsc_get_recall for full detail on a specific recall number. ' +
+    'Use cpsc_get_recent for a recent recall feed. ' +
+    'CPSC jurisdiction: consumer products only — food/drugs (FDA), vehicles/tires (NHTSA), boats (USCG), pesticides (EPA) are covered by other agencies.',
+  setup(core) {
+    void core;
+    initCpscRecallService();
+  },
 });
