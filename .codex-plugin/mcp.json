@@ -1,7 +1,7 @@
 {
-  "cpsc-recalls-mcp-server": {
+  "@cyanheads/cpsc-recalls-mcp-server": {
     "command": "npx",
-    "args": ["-y", "cpsc-recalls-mcp-server"],
+    "args": ["-y", "@cyanheads/cpsc-recalls-mcp-server"],
     "env": {
       "MCP_TRANSPORT_TYPE": "stdio"
     }

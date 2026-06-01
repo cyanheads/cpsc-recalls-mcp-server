@@ -1,17 +1,17 @@
 {
-  "name": "cpsc-recalls-mcp-server",
-  "version": "0.1.0",
-  "description": "",
+  "name": "@cyanheads/cpsc-recalls-mcp-server",
+  "version": "0.1.1",
+  "description": "MCP server for US consumer product recalls from the Consumer Product Safety Commission — hazards, remedies, and affected products.",
   "author": {
-    "name": ""
+    "name": "cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/cpsc-recalls-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/cpsc-recalls-mcp-server",
   "license": "Apache-2.0",
   "mcpServers": {
-    "cpsc-recalls-mcp-server": {
+    "@cyanheads/cpsc-recalls-mcp-server": {
       "command": "npx",
-      "args": ["-y", "cpsc-recalls-mcp-server"],
+      "args": ["-y", "@cyanheads/cpsc-recalls-mcp-server"],
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio"
       }
