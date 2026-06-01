@@ -1,0 +1,9 @@
+{
+  "cpsc-recalls-mcp-server": {
+    "command": "npx",
+    "args": ["-y", "cpsc-recalls-mcp-server"],
+    "env": {
+      "MCP_TRANSPORT_TYPE": "stdio"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "cpsc-recalls-mcp-server",
+  "version": "0.1.0",
+  "description": "",
+  "author": {
+    "name": ""
+  },
+  "homepage": "",
+  "repository": "",
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "cpsc-recalls-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "cpsc-recalls-mcp-server"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio"
+      }
+    }
+  }
+}
