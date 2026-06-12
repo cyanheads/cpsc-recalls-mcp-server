@@ -11,6 +11,8 @@ import { cpscSearchRecalls } from './mcp-server/tools/definitions/cpsc-search-re
 import { initCpscRecallService } from './services/cpsc-recall/cpsc-recall-service.js';
 
 await createApp({
+  name: 'cpsc-recalls-mcp-server',
+  title: 'cpsc-recalls-mcp-server',
   tools: [cpscSearchRecalls, cpscGetRecall, cpscGetRecent],
   resources: [],
   prompts: [],
