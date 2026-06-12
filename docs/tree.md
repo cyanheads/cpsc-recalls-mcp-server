@@ -1,9 +1,10 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-06-01 09:49:55
+Generated on: 2026-06-12 03:28:57
 
 ```text
 cpsc-recalls-mcp-server/
+├── .agents/
 ├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
@@ -31,6 +32,7 @@ cpsc-recalls-mcp-server/
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
 │   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
@@ -93,6 +95,13 @@ cpsc-recalls-mcp-server/
 │   │   └── SKILL.md
 │   ├── maintenance/
 │   │   └── SKILL.md
+│   ├── orchestrations/
+│   │   ├── workflows/
+│   │   │   ├── field-test-fix.md
+│   │   │   ├── fix-wrapup-release.md
+│   │   │   ├── greenfield-build.md
+│   │   │   └── maintenance-release.md
+│   │   └── SKILL.md
 │   ├── polish-docs-meta/
 │   │   ├── references/
 │   │   │   ├── agent-protocol.md
@@ -109,6 +118,10 @@ cpsc-recalls-mcp-server/
 │   ├── security-pass/
 │   │   └── SKILL.md
 │   ├── setup/
+│   │   └── SKILL.md
+│   ├── techniques/
+│   │   ├── references/
+│   │   │   └── outline-on-overflow.md
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
