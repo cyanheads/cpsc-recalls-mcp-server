@@ -1,5 +1,5 @@
 {
-  "name": "@cyanheads/cpsc-recalls-mcp-server",
+  "name": "cpsc-recalls-mcp-server",
   "version": "0.1.3",
   "description": "MCP server for US consumer product recalls from the Consumer Product Safety Commission — hazards, remedies, and affected products.",
   "author": {
@@ -13,7 +13,7 @@
   "keywords": ["mcp", "mcp-server", "model-context-protocol", "cpsc", "recalls", "consumer-product-safety", "product-safety"],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "@cyanheads/cpsc-recalls-mcp-server",
+    "displayName": "cpsc-recalls-mcp-server",
     "shortDescription": "MCP server for US consumer product recalls from the Consumer Product Safety Commission — hazards, remedies, and affected products.",
     "longDescription": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. Covers toys, electronics, furniture, appliances, children's products, tools, and clothing. STDIO or Streamable HTTP.",
     "developerName": "cyanheads",
