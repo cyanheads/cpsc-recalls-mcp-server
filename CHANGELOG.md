@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-20
+
+Maintenance: @cyanheads/mcp-ts-core ^0.10.6 → ^0.10.9; plugin-manifest packaging checks enabled; biome 2.5, @types/node 26, vitest 4.1.9 refresh
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-11
 
 Maintenance: @cyanheads/mcp-ts-core ^0.9.19 → ^0.10.6; explicit name/title identity pair; bundle-content guards + agent-doc strip; Dockerfile healthcheck
