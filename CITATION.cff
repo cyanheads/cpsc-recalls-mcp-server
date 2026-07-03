@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: cpsc-recalls-mcp-server
+abstract: "MCP server for US consumer product recalls from the Consumer Product Safety Commission — hazards, remedies, and affected products."
+type: software
+authors:
+  - family-names: Hand
+    given-names: Casey
+    orcid: "https://orcid.org/0009-0009-3726-568X"
+repository-code: "https://github.com/cyanheads/cpsc-recalls-mcp-server"
+license: Apache-2.0
+keywords:
+  - mcp
+  - model-context-protocol
+  - cpsc
+  - product-safety
+  - recalls
+  - consumer-product-safety
