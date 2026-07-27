@@ -44,6 +44,35 @@ const makeRaw = (overrides?: Record<string, unknown>) => ({
   ...overrides,
 });
 
+/** A full result matching the output schema, for exercising format() directly. */
+const makeFormatResult = (overrides?: Record<string, unknown>) => ({
+  recall_number: '25043',
+  recall_date: '2025-03-15',
+  last_updated: '2025-03-20',
+  title: 'ACME Widget Recall',
+  description: 'Fire hazard. Model: ACM-1234.',
+  cpsc_url: 'https://www.cpsc.gov/Recalls/2025/acme-widget',
+  consumer_contact: 'Call 1-800-555-1234',
+  hazards: [{ description: 'Fire hazard' }],
+  remedy_options: ['Refund'],
+  remedy_instructions: 'Contact ACME for a full refund.',
+  products: [{ name: 'ACME Widget', units_recalled: 'About 5,000' }],
+  upcs: ['012345678901'],
+  injuries: 'None reported',
+  manufacturers: ['ACME Corp'],
+  importers: [],
+  retailers: ['Target (Feb 2024 – Mar 2025, $45)'],
+  distributors: [],
+  manufacturer_countries: ['China'],
+  images: [{ url: 'https://example.com/img.jpg', caption: 'Product photo' }],
+  coordinated_recalls: [],
+  data_quality_notes: [],
+  cpsc_jurisdiction: 'CPSC covers consumer products.',
+  source_note:
+    'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+  ...overrides,
+});
+
 vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
   getCpscRecallService: vi.fn(),
   initCpscRecallService: vi.fn(),
@@ -117,30 +146,7 @@ describe('cpsc_get_recall', () => {
   });
 
   it('format renders hazard, remedy, products, images', () => {
-    const fakeResult = {
-      recall_number: '25043',
-      recall_date: '2025-03-15',
-      last_updated: '2025-03-20',
-      title: 'ACME Widget Recall',
-      description: 'Fire hazard. Model: ACM-1234.',
-      cpsc_url: 'https://www.cpsc.gov/Recalls/2025/acme-widget',
-      consumer_contact: 'Call 1-800-555-1234',
-      hazards: [{ description: 'Fire hazard' }],
-      remedy_options: ['Refund'],
-      remedy_instructions: 'Contact ACME for a full refund.',
-      products: [{ name: 'ACME Widget', units_recalled: 'About 5,000' }],
-      upcs: ['012345678901'],
-      injuries: 'None reported',
-      manufacturers: ['ACME Corp'],
-      importers: [],
-      retailers: ['Target (Feb 2024 – Mar 2025, $45)'],
-      distributors: [],
-      manufacturer_countries: ['China'],
-      images: [{ url: 'https://example.com/img.jpg', caption: 'Product photo' }],
-      coordinated_recalls: [],
-      cpsc_jurisdiction: 'CPSC covers consumer products.',
-    };
-    const blocks = cpscGetRecall.format(fakeResult);
+    const blocks = cpscGetRecall.format(makeFormatResult());
     const text = blocks[0].text;
     expect(text).toContain('⚠️ Hazard');
     expect(text).toContain('Fire hazard');
@@ -161,5 +167,153 @@ describe('cpsc_get_recall', () => {
     expect(result.consumer_contact).toBeNull();
     expect(result.upcs).toEqual([]);
     expect(result.coordinated_recalls).toEqual([]);
+  });
+
+  describe('absent upstream description', () => {
+    it('returns an otherwise-complete record whose Description is null', async () => {
+      mockGetByNumber.mockResolvedValueOnce(makeRaw({ RecallNumber: '04084', Description: null }));
+      const input = cpscGetRecall.input.parse({ recall_number: '04084' });
+      const result = await cpscGetRecall.handler(input, ctx);
+
+      expect(result.description).toBeNull();
+      expect(result.title).toBe('ACME Widget Recall');
+      // The output schema is what rejected this record before — assert it now validates.
+      expect(() => cpscGetRecall.output.parse(result)).not.toThrow();
+    });
+
+    it('notes the absence for both the null and empty-string forms', async () => {
+      for (const Description of [null, '']) {
+        mockGetByNumber.mockResolvedValueOnce(makeRaw({ Description }));
+        const input = cpscGetRecall.input.parse({ recall_number: '25043' });
+        const result = await cpscGetRecall.handler(input, ctx);
+
+        expect(result.data_quality_notes).toContain(
+          'CPSC published no description text for this recall, so product identification details (including model numbers) are unavailable here.',
+        );
+      }
+    });
+
+    it('renders a visible placeholder instead of a blank Description section', () => {
+      for (const description of [null, '', '   ']) {
+        const text = cpscGetRecall.format(makeFormatResult({ description }))[0].text;
+        const section = text.slice(text.indexOf('## Description'));
+
+        expect(section).toContain('_Not provided by CPSC._');
+      }
+    });
+
+    it('renders the description as quoted CPSC source text when present', () => {
+      const text = cpscGetRecall.format(
+        makeFormatResult({ description: 'Line one.\nLine two.' }),
+      )[0].text;
+
+      expect(text).toContain('## Description (CPSC source text)');
+      expect(text).toContain('> Line one.\n> Line two.');
+    });
+  });
+
+  describe('manufacturer / importer role attribution', () => {
+    /** A real CPSC org name — commas inside the name made the merged list unreadable. */
+    const importerWithCommas = 'Baituo Innovation Technology Co. Ltd., dba Romorgniz, of China';
+
+    it('gives each role its own heading when both are populated', () => {
+      const text = cpscGetRecall.format(
+        makeFormatResult({ manufacturers: ['ACME Corp'], importers: [importerWithCommas] }),
+      )[0].text;
+
+      expect(text).toContain('## Manufactured By\n- ACME Corp');
+      expect(text).toContain(`## Imported By\n- ${importerWithCommas}`);
+      expect(text).not.toContain('## Manufactured By / Imported By');
+    });
+
+    it('renders only the manufacturer heading when there is no importer', () => {
+      const text = cpscGetRecall.format(
+        makeFormatResult({ manufacturers: ['ACME Corp'], importers: [] }),
+      )[0].text;
+
+      expect(text).toContain('## Manufactured By');
+      expect(text).not.toContain('## Imported By');
+    });
+
+    it('renders only the importer heading when there is no manufacturer', () => {
+      const text = cpscGetRecall.format(
+        makeFormatResult({ manufacturers: [], importers: [importerWithCommas] }),
+      )[0].text;
+
+      expect(text).toContain('## Imported By');
+      expect(text).not.toContain('## Manufactured By');
+    });
+
+    it('still renders country of origin when neither role is populated', () => {
+      const text = cpscGetRecall.format(
+        makeFormatResult({ manufacturers: [], importers: [], manufacturer_countries: ['China'] }),
+      )[0].text;
+
+      expect(text).toContain('Country of origin: China');
+    });
+  });
+
+  describe('data quality notes and source caveat', () => {
+    it('populates a note per absent upstream field', async () => {
+      mockGetByNumber.mockResolvedValueOnce(
+        makeRaw({ Description: null, Hazards: [], Products: [] }),
+      );
+      const input = cpscGetRecall.input.parse({ recall_number: '25043' });
+      const result = await cpscGetRecall.handler(input, ctx);
+
+      expect(result.data_quality_notes).toHaveLength(3);
+      expect(result.data_quality_notes[1]).toBe(
+        'CPSC listed no hazard description for this recall.',
+      );
+      expect(result.data_quality_notes[2]).toBe('CPSC listed no product entries for this recall.');
+    });
+
+    it('leaves notes empty for a complete record', async () => {
+      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      const input = cpscGetRecall.input.parse({ recall_number: '25043' });
+      const result = await cpscGetRecall.handler(input, ctx);
+
+      expect(result.data_quality_notes).toEqual([]);
+      expect(result.source_note).toContain('relayed verbatim from the CPSC record');
+    });
+
+    it('renders the notes section only when notes exist, and always the source caveat', () => {
+      const withNotes = cpscGetRecall.format(
+        makeFormatResult({ data_quality_notes: ['CPSC listed no hazard description.'] }),
+      )[0].text;
+      const withoutNotes = cpscGetRecall.format(makeFormatResult())[0].text;
+
+      expect(withNotes).toContain('## Data quality (server-assessed)');
+      expect(withNotes).toContain('- CPSC listed no hazard description.');
+      expect(withoutNotes).not.toContain('## Data quality');
+      expect(withoutNotes).toContain('relayed verbatim from the CPSC record');
+      expect(withoutNotes).toContain('cpsc_url');
+    });
+
+    it('marks relayed narrative fields as CPSC source text', () => {
+      const text = cpscGetRecall.format(makeFormatResult())[0].text;
+
+      expect(text).toContain('Quoted blocks below are CPSC source text, relayed unedited.');
+      expect(text).toContain('**⚠️ Hazard (CPSC source text):**\n> Fire hazard');
+      expect(text).toContain('## Incidents / Injuries (CPSC source text)\n> None reported');
+      expect(text).toContain('**Contact (CPSC source text):**\n> Call 1-800-555-1234');
+      // Server-authored guidance stays outside the quoted blocks.
+      expect(text).toContain('Model numbers are in the description below if not listed here.');
+    });
+
+    it('separates every quoted block from the guidance that follows it', () => {
+      const text = cpscGetRecall.format(makeFormatResult())[0].text;
+      const lines = text.split('\n');
+
+      /**
+       * Markdown lazy continuation folds an unseparated following line into the
+       * preceding blockquote, which would render server guidance as CPSC source text.
+       */
+      for (const [i, line] of lines.entries()) {
+        const next = lines[i + 1];
+        if (!line.startsWith('>') || next === undefined) continue;
+        expect(next.startsWith('>') || next === '').toBe(true);
+      }
+    });
   });
 });

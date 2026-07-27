@@ -42,6 +42,29 @@ const makeRaw = (overrides?: Record<string, unknown>) => ({
   ...overrides,
 });
 
+/** A single-recall result matching the output schema, for exercising format() directly. */
+const makeFormatResult = (recallOverrides?: Record<string, unknown>) => ({
+  recalls: [
+    {
+      recall_number: '25043',
+      recall_date: '2025-03-15',
+      title: 'ACME Widget Recall',
+      hazards: ['Fire hazard'],
+      remedy_options: ['Refund'],
+      products: ['ACME Widget'],
+      cpsc_url: 'https://www.cpsc.gov/Recalls/2025/acme-widget',
+      data_quality_notes: [],
+      ...recallOverrides,
+    },
+  ],
+  period: { start: '2025-03-01', end: '2025-03-31', days: 30 },
+  total_found: 1,
+  truncated: false,
+  cpsc_jurisdiction: 'CPSC covers consumer products.',
+  source_note:
+    'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+});
+
 vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
   getCpscRecallService: vi.fn(),
   initCpscRecallService: vi.fn(),
@@ -112,24 +135,7 @@ describe('cpsc_get_recent', () => {
   });
 
   it('format renders period header and recall rows', () => {
-    const fakeResult = {
-      recalls: [
-        {
-          recall_number: '25043',
-          recall_date: '2025-03-15',
-          title: 'ACME Widget Recall',
-          hazards: ['Fire hazard'],
-          remedy_options: ['Refund'],
-          products: ['ACME Widget'],
-          cpsc_url: 'https://www.cpsc.gov/Recalls/2025/acme-widget',
-        },
-      ],
-      period: { start: '2025-03-01', end: '2025-03-31', days: 30 },
-      total_found: 1,
-      truncated: false,
-      cpsc_jurisdiction: 'CPSC covers consumer products.',
-    };
-    const blocks = cpscGetRecent.format(fakeResult);
+    const blocks = cpscGetRecent.format(makeFormatResult());
     const text = blocks[0].text;
     expect(text).toContain('2025-03-01');
     expect(text).toContain('2025-03-31');
@@ -138,5 +144,54 @@ describe('cpsc_get_recent', () => {
     expect(text).toContain('Refund');
     expect(text).toContain('ACME Widget');
     expect(text).toContain('CPSC covers');
+  });
+
+  describe('data quality notes and source caveat', () => {
+    it('populates notes for a record with no hazards and no products', async () => {
+      mockGetRecent.mockResolvedValueOnce([makeRaw({ Hazards: [], Products: [] })]);
+      const input = cpscGetRecent.input.parse({});
+      const result = await cpscGetRecent.handler(input, ctx);
+
+      expect(result.recalls[0].data_quality_notes).toEqual([
+        'CPSC listed no hazard description for this recall.',
+        'CPSC listed no product entries for this recall.',
+      ]);
+      expect(cpscGetRecent.output.parse(result)).toBeDefined();
+    });
+
+    it('leaves notes empty for a complete record', async () => {
+      mockGetRecent.mockResolvedValueOnce([makeRaw()]);
+      const input = cpscGetRecent.input.parse({});
+      const result = await cpscGetRecent.handler(input, ctx);
+
+      expect(result.recalls[0].data_quality_notes).toEqual([]);
+    });
+
+    it('carries the source caveat on the handler result', async () => {
+      mockGetRecent.mockResolvedValueOnce([makeRaw()]);
+      const input = cpscGetRecent.input.parse({});
+      const result = await cpscGetRecent.handler(input, ctx);
+
+      expect(result.source_note).toContain('relayed verbatim from the CPSC record');
+    });
+
+    it('renders notes only when present, and always renders the source caveat', () => {
+      const withNotes = cpscGetRecent.format(
+        makeFormatResult({ data_quality_notes: ['CPSC listed no hazard description.'] }),
+      )[0].text;
+      const withoutNotes = cpscGetRecent.format(makeFormatResult())[0].text;
+
+      expect(withNotes).toContain('**Data quality (server-assessed):**');
+      expect(withNotes).toContain('CPSC listed no hazard description.');
+      expect(withoutNotes).not.toContain('Data quality');
+      expect(withoutNotes).toContain('relayed verbatim from the CPSC record');
+      expect(withoutNotes).toContain('cpsc_url');
+    });
+
+    it('labels the relayed block as CPSC source fields', () => {
+      const text = cpscGetRecent.format(makeFormatResult())[0].text;
+
+      expect(text).toContain('CPSC source fields:\nHazard: Fire hazard');
+    });
   });
 });

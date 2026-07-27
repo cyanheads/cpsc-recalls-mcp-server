@@ -12,6 +12,22 @@ import type { CpscSearchParams, RawRecall } from './types.js';
 const BASE_URL = 'https://www.saferproducts.gov/RestWebServices/Recall';
 /** Request timeout: 30 s. The API returns full datasets; allow enough time. */
 const TIMEOUT_MS = 30_000;
+/** Upper bound on how much of the upstream error text is echoed back in the thrown message. */
+const ERROR_ROW_MESSAGE_LIMIT = 200;
+
+/**
+ * True when a row is CPSC's error row rather than a recall record.
+ *
+ * When a request is malformed upstream (an unparseable date filter, for example) the API
+ * answers HTTP 200 with a one-element array whose identifying fields are null and whose
+ * `Title` carries the upstream message. The check keys on the identifying fields only —
+ * a genuine record can carry a null `Description` and must not be rejected.
+ */
+function isCpscErrorRow(row: unknown): boolean {
+  if (typeof row !== 'object' || row === null) return true;
+  const r = row as Partial<RawRecall>;
+  return r.RecallNumber == null || r.RecallDate == null || r.Title == null;
+}
 
 export class CpscRecallService {
   /**
@@ -83,6 +99,18 @@ export class CpscRecallService {
         }
         if (!Array.isArray(data)) {
           throw serviceUnavailable('CPSC API response was not a JSON array.');
+        }
+        const errorRow = data.find(isCpscErrorRow);
+        if (errorRow !== undefined) {
+          const upstreamMessage = (errorRow as Partial<RawRecall>)?.Title;
+          throw serviceUnavailable(
+            'CPSC API returned an error row instead of recall records' +
+              (typeof upstreamMessage === 'string' && upstreamMessage.length > 0
+                ? `: ${upstreamMessage.slice(0, ERROR_ROW_MESSAGE_LIMIT)}`
+                : '.'),
+            // Deterministic — the same request produces the same error row, so skip retries.
+            { retryable: false },
+          );
         }
         return data as RawRecall[];
       },

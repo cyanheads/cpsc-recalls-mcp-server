@@ -13,6 +13,12 @@ const JURISDICTION =
   'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. ' +
   'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).';
 
+/** Static provenance caveat included in every response. */
+const SOURCE_NOTE =
+  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. ' +
+  'CPSC records occasionally carry missing or inconsistent text. ' +
+  'Check cpsc_url before acting on a recall for a consumer-facing decision.';
+
 /** Format a Date as "YYYY-MM-DD". */
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -64,6 +70,12 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
               .array(z.string().describe('Product name.'))
               .describe('Product names recalled.'),
             cpsc_url: z.string().describe('Official CPSC recall page URL.'),
+            data_quality_notes: z
+              .array(z.string().describe('One gap found in the upstream record.'))
+              .describe(
+                'Gaps this server observed in the upstream CPSC record — absent hazard text, absent product entries. ' +
+                  'Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
+              ),
           })
           .describe('A recent CPSC recall.'),
       )
@@ -82,6 +94,11 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       .describe(
         'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. ' +
           'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
+      ),
+    source_note: z
+      .string()
+      .describe(
+        'Provenance caveat: recall fields are relayed from CPSC unedited and unverified; check cpsc_url before a consumer-facing decision.',
       ),
   }),
 
@@ -127,15 +144,29 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     const slice = raw.slice(0, input.limit);
     const truncated = total_found > input.limit;
 
-    const recalls = slice.map((r) => ({
-      recall_number: r.RecallNumber,
-      recall_date: r.RecallDate.slice(0, 10),
-      title: r.Title,
-      hazards: r.Hazards.map((h) => h.Name).filter(Boolean),
-      remedy_options: r.RemedyOptions.map((o) => o.Option).filter(Boolean),
-      products: r.Products.map((p) => p.Name).filter(Boolean),
-      cpsc_url: r.URL,
-    }));
+    const recalls = slice.map((r) => {
+      const hazards = r.Hazards.map((h) => h.Name).filter(Boolean);
+      const products = r.Products.map((p) => p.Name).filter(Boolean);
+
+      const data_quality_notes: string[] = [];
+      if (hazards.length === 0) {
+        data_quality_notes.push('CPSC listed no hazard description for this recall.');
+      }
+      if (products.length === 0) {
+        data_quality_notes.push('CPSC listed no product entries for this recall.');
+      }
+
+      return {
+        recall_number: r.RecallNumber,
+        recall_date: r.RecallDate.slice(0, 10),
+        title: r.Title,
+        hazards,
+        remedy_options: r.RemedyOptions.map((o) => o.Option).filter(Boolean),
+        products,
+        cpsc_url: r.URL,
+        data_quality_notes,
+      };
+    });
 
     ctx.log.info('Recent recalls fetched', { total_found, returned: recalls.length, truncated });
 
@@ -145,6 +176,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       total_found,
       truncated,
       cpsc_jurisdiction: JURISDICTION,
+      source_note: SOURCE_NOTE,
     };
   },
 
@@ -171,12 +203,17 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       const productText = r.products.length > 0 ? r.products.join(', ') : 'Not specified';
 
       lines.push(`**${r.recall_date}** — [${r.recall_number}] ${r.title}`);
+      lines.push('CPSC source fields:');
       lines.push(`Hazard: ${hazardText}  |  Remedy: ${remedyText}`);
       lines.push(`Products: ${productText}`);
       lines.push(`[CPSC page](${r.cpsc_url})`);
+      if (r.data_quality_notes.length > 0) {
+        lines.push(`**Data quality (server-assessed):** ${r.data_quality_notes.join(' ')}`);
+      }
       lines.push('---');
     }
 
+    lines.push(`Source: ${result.source_note}`);
     lines.push(`CPSC jurisdiction: ${result.cpsc_jurisdiction}`);
 
     return [{ type: 'text', text: lines.join('\n') }];

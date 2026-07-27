@@ -14,6 +14,12 @@ const JURISDICTION =
   'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF). ' +
   'For those categories, use the appropriate server.';
 
+/** Static provenance caveat included in every response. */
+const SOURCE_NOTE =
+  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. ' +
+  'CPSC records occasionally carry missing or inconsistent text. ' +
+  'Check cpsc_url before acting on a recall for a consumer-facing decision.';
+
 export const cpscSearchRecalls = tool('cpsc_search_recalls', {
   title: 'Search CPSC Recalls',
   description:
@@ -61,25 +67,19 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
           'Note: hazard keywords often appear in the Description field — this is the correct filter for hazard-type searching since the Hazard filter param is non-functional upstream.',
       ),
     date_start: z
-      .union([
-        z.literal(''),
-        z
-          .string()
-          .regex(/^\d{4}-\d{2}-\d{2}$/)
-          .describe('ISO 8601 date: "YYYY-MM-DD".'),
-      ])
+      .union([z.literal(''), z.iso.date().describe('ISO 8601 date: "YYYY-MM-DD".')])
       .optional()
-      .describe('Include only recalls on or after this date. ISO 8601 format: "YYYY-MM-DD".'),
+      .describe(
+        'Include only recalls on or after this date. ISO 8601 format: "YYYY-MM-DD". ' +
+          'Must be a real calendar date — "2026-02-31" and "2026-99-99" are rejected.',
+      ),
     date_end: z
-      .union([
-        z.literal(''),
-        z
-          .string()
-          .regex(/^\d{4}-\d{2}-\d{2}$/)
-          .describe('ISO 8601 date: "YYYY-MM-DD".'),
-      ])
+      .union([z.literal(''), z.iso.date().describe('ISO 8601 date: "YYYY-MM-DD".')])
       .optional()
-      .describe('Include only recalls on or before this date. ISO 8601 format: "YYYY-MM-DD".'),
+      .describe(
+        'Include only recalls on or before this date. ISO 8601 format: "YYYY-MM-DD". ' +
+          'Must be a real calendar date, and on or after date_start.',
+      ),
     limit: z
       .number()
       .int()
@@ -157,6 +157,12 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
                   .describe('An image from the recall notice.'),
               )
               .describe('Product images from the recall notice.'),
+            data_quality_notes: z
+              .array(z.string().describe('One gap found in the upstream record.'))
+              .describe(
+                'Gaps this server observed in the upstream CPSC record — absent hazard text, absent product entries. ' +
+                  'Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
+              ),
           })
           .describe('A CPSC recall record.'),
       )
@@ -169,9 +175,21 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
         'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. ' +
           'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
       ),
+    source_note: z
+      .string()
+      .describe(
+        'Provenance caveat: recall fields are relayed from CPSC unedited and unverified; check cpsc_url before a consumer-facing decision.',
+      ),
   }),
 
   errors: [
+    {
+      reason: 'invalid_date_range',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'date_start is later than date_end, so the range can never match',
+      recovery:
+        'Swap the two dates, or drop one of them. date_start is the earliest recall date to include and date_end the latest.',
+    },
     {
       reason: 'no_results',
       code: JsonRpcErrorCode.NotFound,
@@ -199,6 +217,14 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       date_end: input.date_end,
       limit: input.limit,
     });
+
+    if (input.date_start && input.date_end && input.date_start > input.date_end) {
+      throw ctx.fail(
+        'invalid_date_range',
+        `date_start "${input.date_start}" is later than date_end "${input.date_end}".`,
+        { ...ctx.recoveryFor('invalid_date_range') },
+      );
+    }
 
     const svc = getCpscRecallService();
     let raw: Awaited<ReturnType<typeof svc.search>>;
@@ -234,30 +260,50 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
     const slice = raw.slice(0, input.limit);
     const truncated = total_found > input.limit;
 
-    const recalls = slice.map((r) => ({
-      recall_number: r.RecallNumber,
-      recall_date: r.RecallDate.slice(0, 10),
-      title: r.Title,
-      hazards: r.Hazards.map((h) => h.Name).filter(Boolean),
-      remedy_options: r.RemedyOptions.map((o) => o.Option).filter(Boolean),
-      remedy_summary: r.Remedies.map((rem) => rem.Name)
-        .filter(Boolean)
-        .join(' '),
-      products: r.Products.map((p) => ({
+    const recalls = slice.map((r) => {
+      const hazards = r.Hazards.map((h) => h.Name).filter(Boolean);
+      const products = r.Products.map((p) => ({
         name: p.Name,
         units_recalled: p.NumberOfUnits ?? '',
-      })),
-      upcs: r.ProductUPCs.map((u) => u.UPC).filter(Boolean),
-      manufacturers: r.Manufacturers.map((m) => m.Name).filter(Boolean),
-      importers: r.Importers.map((i) => i.Name).filter(Boolean),
-      retailers: r.Retailers.map((ret) => ret.Name).filter(Boolean),
-      cpsc_url: r.URL,
-      images: r.Images.map((img) => ({ url: img.URL, caption: img.Caption })),
-    }));
+      }));
+
+      const data_quality_notes: string[] = [];
+      if (hazards.length === 0) {
+        data_quality_notes.push('CPSC listed no hazard description for this recall.');
+      }
+      if (products.length === 0) {
+        data_quality_notes.push('CPSC listed no product entries for this recall.');
+      }
+
+      return {
+        recall_number: r.RecallNumber,
+        recall_date: r.RecallDate.slice(0, 10),
+        title: r.Title,
+        hazards,
+        remedy_options: r.RemedyOptions.map((o) => o.Option).filter(Boolean),
+        remedy_summary: r.Remedies.map((rem) => rem.Name)
+          .filter(Boolean)
+          .join(' '),
+        products,
+        upcs: r.ProductUPCs.map((u) => u.UPC).filter(Boolean),
+        manufacturers: r.Manufacturers.map((m) => m.Name).filter(Boolean),
+        importers: r.Importers.map((i) => i.Name).filter(Boolean),
+        retailers: r.Retailers.map((ret) => ret.Name).filter(Boolean),
+        cpsc_url: r.URL,
+        images: r.Images.map((img) => ({ url: img.URL, caption: img.Caption })),
+        data_quality_notes,
+      };
+    });
 
     ctx.log.info('Search complete', { total_found, returned: recalls.length, truncated });
 
-    return { recalls, total_found, truncated, cpsc_jurisdiction: JURISDICTION };
+    return {
+      recalls,
+      total_found,
+      truncated,
+      cpsc_jurisdiction: JURISDICTION,
+      source_note: SOURCE_NOTE,
+    };
   },
 
   format(result) {
@@ -265,6 +311,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
 
     for (const r of result.recalls) {
       lines.push(`## [${r.recall_number}] — ${r.title} (${r.recall_date})`);
+      lines.push('CPSC source fields:');
 
       const hazardText = r.hazards.length > 0 ? r.hazards.join('; ') : 'Not specified';
       lines.push(`**Hazard:** ${hazardText}`);
@@ -276,7 +323,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
 
       const productNames = r.products
         .map((p) => `${p.name} (${p.units_recalled || 'units not specified'})`)
-        .join(', ');
+        .join('; ');
       lines.push(`**Products:** ${productNames || 'Not specified'}`);
 
       if (r.upcs.length > 0) {
@@ -286,9 +333,19 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       const soldBy = r.retailers.length > 0 ? r.retailers.join('; ') : 'Not specified';
       lines.push(`**Sold by:** ${soldBy}`);
 
-      const orgs = [...r.manufacturers, ...r.importers];
-      const orgText = orgs.length > 0 ? orgs.join(', ') : 'Not specified';
-      lines.push(`**Manufacturer/Importer:** ${orgText}`);
+      /**
+       * Manufacturer and importer are distinct roles and CPSC org names contain commas,
+       * so each role gets its own line and entries are separated with '; '.
+       */
+      if (r.manufacturers.length > 0) {
+        lines.push(`**Manufacturer:** ${r.manufacturers.join('; ')}`);
+      }
+      if (r.importers.length > 0) {
+        lines.push(`**Importer:** ${r.importers.join('; ')}`);
+      }
+      if (r.manufacturers.length === 0 && r.importers.length === 0) {
+        lines.push('**Manufacturer/Importer:** Not specified');
+      }
 
       if (r.images.length > 0) {
         const imgList = r.images.map((img) => `${img.caption}: ${img.url}`).join('; ');
@@ -297,12 +354,16 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
         lines.push(`**Images:** None`);
       }
       lines.push(`[View recall](${r.cpsc_url})`);
+      if (r.data_quality_notes.length > 0) {
+        lines.push(`**Data quality (server-assessed):** ${r.data_quality_notes.join(' ')}`);
+      }
       lines.push('---');
     }
 
     lines.push(
       `Showing ${result.recalls.length} of ${result.total_found} recalls.${result.truncated ? ' Results truncated — narrow by date or filter to see more.' : ''}`,
     );
+    lines.push(`Source: ${result.source_note}`);
     lines.push(`CPSC covers: ${result.cpsc_jurisdiction}`);
 
     return [{ type: 'text', text: lines.join('\n') }];

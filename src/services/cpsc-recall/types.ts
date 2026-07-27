@@ -3,10 +3,18 @@
  * @module services/cpsc-recall/types
  */
 
-/** Raw recall record as returned by the CPSC REST API. */
+/**
+ * Raw recall record as returned by the CPSC REST API.
+ *
+ * The identifying fields (`RecallNumber`, `RecallDate`, `Title`) are always present on a
+ * genuine record. CPSC nulls them on the error row it substitutes for results when a
+ * request is malformed upstream; `CpscRecallService` rejects that row before any record
+ * reaches a handler, so consumers of this type can treat them as non-null.
+ */
 export interface RawRecall {
   ConsumerContact: string | null;
-  Description: string;
+  /** Null or empty on a small number of genuine records (e.g. recall `04084`). */
+  Description: string | null;
   Distributors: Array<{ Name: string; CompanyID: string }>;
   Hazards: Array<{ Name: string; HazardType: string; HazardTypeID: string }>;
   Images: Array<{ URL: string; Caption: string }>;
