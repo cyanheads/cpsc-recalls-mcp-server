@@ -54,12 +54,27 @@ export interface RawProduct {
 
 /** Parameters for the CPSC search endpoint. */
 export interface CpscSearchParams {
+  /** Substring match against `Distributors[].Name`. */
+  Distributor?: string;
   Importer?: string;
+  /** Upper bound on `LastPublishDate` — a separate axis from `RecallDate`. */
+  LastPublishDateEnd?: string;
+  /** Lower bound on `LastPublishDate` — a separate axis from `RecallDate`. */
+  LastPublishDateStart?: string;
   Manufacturer?: string;
   ProductName?: string;
   RecallDateEnd?: string;
   RecallDateStart?: string;
   /** Maps to RecallDescription — searches the Description field only. */
   RecallDescription?: string;
+  /** Substring match against `Title`. */
+  RecallTitle?: string;
+  /**
+   * Substring match against the free-text `Remedies[].Name` narrative — NOT the
+   * `RemedyOptions[].Option` type enum. Verified against the full dataset: `Remedy=Repair`
+   * returns exactly the 2,011 records whose remedy narrative contains "repair", while only
+   * 1,557 records carry `Repair` in `RemedyOptions`.
+   */
+  Remedy?: string;
   Retailer?: string;
 }

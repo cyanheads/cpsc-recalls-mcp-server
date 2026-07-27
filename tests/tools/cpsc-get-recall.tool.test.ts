@@ -3,6 +3,7 @@
  * @module tests/tools/cpsc-get-recall.tool.test
  */
 
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
@@ -119,11 +120,27 @@ describe('cpsc_get_recall', () => {
     });
   });
 
-  it('throws upstream_error on service failure', async () => {
+  it('throws upstream_error on service failure and carries the upstream message', async () => {
     mockGetByNumber.mockRejectedValueOnce(new Error('timeout'));
     const input = cpscGetRecall.input.parse({ recall_number: '25043' });
     await expect(cpscGetRecall.handler(input, ctx)).rejects.toMatchObject({
-      data: { reason: 'upstream_error' },
+      message: 'CPSC API request failed: timeout',
+      data: { reason: 'upstream_error', retryable: true },
+    });
+  });
+
+  it('routes a non-retryable service error to upstream_rejected', async () => {
+    mockGetByNumber.mockRejectedValueOnce(
+      new McpError(
+        JsonRpcErrorCode.ServiceUnavailable,
+        'CPSC API returned an error row instead of recall records: Invalid recall number.',
+        { retryable: false },
+      ),
+    );
+    const input = cpscGetRecall.input.parse({ recall_number: '25043' });
+    await expect(cpscGetRecall.handler(input, ctx)).rejects.toMatchObject({
+      message: 'CPSC API returned an error row instead of recall records: Invalid recall number.',
+      data: { reason: 'upstream_rejected', retryable: false },
     });
   });
 

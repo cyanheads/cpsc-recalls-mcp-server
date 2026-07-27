@@ -5,7 +5,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** Static jurisdiction note included in every response. */
@@ -30,6 +30,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     'Fetch the most recent CPSC consumer product recalls, ordered newest-first. ' +
     'Use for "what\'s been recalled lately?" or a product safety feed. ' +
     'Always applies a date window (default: last 30 days) — without a date filter the API returns all 9,800+ records. ' +
+    'Page past limit with offset: narrowing days cannot page, because the window is anchored to today and shrinking it drops the oldest records rather than advancing past the newest. ' +
     'CPSC jurisdiction: consumer products only — food, vehicles, drugs, and pesticides are covered by other agencies.',
   annotations: { readOnlyHint: true },
 
@@ -50,6 +51,15 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       .max(100)
       .default(20)
       .describe('Maximum number of recalls to return. Defaults to 20.'),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Skip this many recalls in the window before returning results. Combine with limit to page through total_found — e.g. limit 20 with offset 0, 20, 40. ' +
+          'An offset at or past total_found returns an empty result set rather than an error.',
+      ),
   }),
 
   output: z.object({
@@ -65,7 +75,13 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
             hazards: z
               .array(z.string().describe('Hazard description.'))
               .describe('What is dangerous.'),
-            remedy_options: z.array(z.string().describe('Remedy type.')).describe('Remedy types.'),
+            remedy_options: z
+              .array(z.string().describe('Remedy type.'))
+              .describe(
+                'Remedy types: Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, Inspect. ' +
+                  'Multiple may apply. Often empty — CPSC classified the remedy on fewer than half its records; ' +
+                  'call cpsc_get_recall for the remedy narrative when this is empty.',
+              ),
             products: z
               .array(z.string().describe('Product name.'))
               .describe('Product names recalled.'),
@@ -87,8 +103,18 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
         days: z.number().describe('Window length in days.'),
       })
       .describe('Date range queried.'),
-    total_found: z.number().describe('Total recalls in this period before the limit was applied.'),
-    truncated: z.boolean().describe('True when total_found exceeds the limit.'),
+    total_found: z
+      .number()
+      .describe('Total recalls in this period, counted before offset and limit narrow the window.'),
+    truncated: z
+      .boolean()
+      .describe('True when total_found exceeds the limit. Independent of offset.'),
+    offset: z.number().describe('Number of recalls skipped before this window.'),
+    has_more: z
+      .boolean()
+      .describe(
+        'True when recalls remain past this window — call again with offset raised by the number of recalls returned.',
+      ),
     cpsc_jurisdiction: z
       .string()
       .describe(
@@ -106,9 +132,17 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The saferproducts.gov API returned an error or timed out',
+      when: 'The saferproducts.gov API returned a transient error or timed out',
       recovery: 'The CPSC API is occasionally unavailable. Retry in a few seconds.',
       retryable: true,
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'The saferproducts.gov API answered with an error row instead of recall records, which the same request will always produce',
+      recovery:
+        'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then try a different days window.',
+      retryable: false,
     },
   ],
 
@@ -125,6 +159,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       date_start: dateStart,
       date_end: dateEnd,
       limit: input.limit,
+      offset: input.offset,
     });
 
     const svc = getCpscRecallService();
@@ -132,17 +167,28 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     try {
       raw = await svc.getRecent(dateStart, dateEnd, ctx);
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      if (err instanceof McpError && err.data?.retryable === false) {
+        throw ctx.fail(
+          'upstream_rejected',
+          detail,
+          { ...ctx.recoveryFor('upstream_rejected') },
+          { cause: err },
+        );
+      }
       throw ctx.fail(
         'upstream_error',
-        'CPSC API request failed.',
+        `CPSC API request failed: ${detail}`,
         { ...ctx.recoveryFor('upstream_error') },
         { cause: err },
       );
     }
 
     const total_found = raw.length;
-    const slice = raw.slice(0, input.limit);
     const truncated = total_found > input.limit;
+    // An offset at or past total_found is a valid empty page, not an error.
+    const slice = raw.slice(input.offset, input.offset + input.limit);
+    const has_more = input.offset + slice.length < total_found;
 
     const recalls = slice.map((r) => {
       const hazards = r.Hazards.map((h) => h.Name).filter(Boolean);
@@ -168,13 +214,21 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       };
     });
 
-    ctx.log.info('Recent recalls fetched', { total_found, returned: recalls.length, truncated });
+    ctx.log.info('Recent recalls fetched', {
+      total_found,
+      returned: recalls.length,
+      offset: input.offset,
+      truncated,
+      has_more,
+    });
 
     return {
       recalls,
       period: { start: dateStart, end: dateEnd, days: input.days },
       total_found,
       truncated,
+      offset: input.offset,
+      has_more,
       cpsc_jurisdiction: JURISDICTION,
       source_note: SOURCE_NOTE,
     };
@@ -187,12 +241,17 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       `# Recent CPSC Recalls — ${result.period.start} to ${result.period.end} (${result.period.days} days)`,
     );
     lines.push('');
-    const truncNote = result.truncated
-      ? `, showing first ${result.recalls.length} (truncated)`
-      : '';
+    const truncNote = result.truncated ? ' (truncated by limit)' : '';
+    const windowNote =
+      result.truncated || result.offset > 0
+        ? `, showing ${result.recalls.length} from offset ${result.offset}${truncNote}`
+        : '';
     lines.push(
-      `Found ${result.total_found} recall${result.total_found !== 1 ? 's' : ''}${truncNote}.`,
+      `Found ${result.total_found} recall${result.total_found !== 1 ? 's' : ''}${windowNote}.`,
     );
+    if (result.has_more) {
+      lines.push(`More available — repeat with offset ${result.offset + result.recalls.length}.`);
+    }
     lines.push('');
     lines.push('---');
 

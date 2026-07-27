@@ -40,9 +40,14 @@ export class CpscRecallService {
       Manufacturer: params.Manufacturer,
       Retailer: params.Retailer,
       Importer: params.Importer,
+      Distributor: params.Distributor,
+      RecallTitle: params.RecallTitle,
       RecallDescription: params.RecallDescription,
+      Remedy: params.Remedy,
       RecallDateStart: params.RecallDateStart,
       RecallDateEnd: params.RecallDateEnd,
+      LastPublishDateStart: params.LastPublishDateStart,
+      LastPublishDateEnd: params.LastPublishDateEnd,
     });
     return this.fetchRecalls(url, ctx);
   }

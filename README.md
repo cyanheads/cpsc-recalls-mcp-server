@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.6-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -33,7 +33,7 @@
 
 | Tool | Description |
 |:---|:---|
-| `cpsc_search_recalls` | Search consumer product recalls by product name, brand, retailer, importer, or description keyword, with optional date filtering |
+| `cpsc_search_recalls` | Search consumer product recalls by title, product name, brand, retailer, importer, distributor, hazard, remedy, or description keyword, with optional date filtering and offset paging |
 | `cpsc_get_recall` | Full detail for a single recall by recall number — hazards, remedy, products, injuries, images, and the official CPSC page |
 | `cpsc_get_recent` | Fetch the most recent recalls ordered newest-first, scoped to a configurable date window |
 
@@ -43,17 +43,20 @@ Data sourced from the [U.S. Consumer Product Safety Commission](https://www.safe
 
 ### `cpsc_search_recalls`
 
-Search recalls with flexible filtering across product, organization, and description fields.
+Search recalls with flexible filtering across title, product, organization, hazard, remedy, and description fields.
 
-- Filter by product name, manufacturer, retailer, importer, or description keyword — all fields are optional substring matches that combine with AND
-- Date range filtering via `date_start` / `date_end` (ISO 8601). Both must be real calendar dates — `2026-02-31` and `2026-99-99` are rejected at input validation, and a reversed range (`date_start` after `date_end`) fails with `invalid_date_range` rather than silently returning nothing
-- Client-side limit (1–200, default 20) applied after fetching all matching records
+- Filter by `title_search`, `product_name`, `manufacturer`, `retailer`, `importer`, `distributor`, `remedy`, or `description_search` — all optional substring matches, applied upstream, combining with AND
+- `title_search` is usually the highest-signal filter: CPSC titles name the brand, the product, and the hazard
+- `hazard_search` is a client-side filter applied after the upstream fetch — it matches when the term appears in hazard descriptions, product names, **or** remedy instructions (case-insensitive). Use it for hazard concepts like "fire", "choking", or "burn"; the upstream `Hazard` parameter is recognized but never matches, so it is not exposed
+- `remedy` searches the free-text remedy instructions, not the `remedy_options` type enum — `remedy: "repair"` matches records whose `remedy_options` list only `Refund` but whose instructions describe a free repair kit
+- Two independent date axes: `date_start` / `date_end` bound the recall issue date, `updated_start` / `updated_end` bound the date CPSC last published the record. A 2003 recall re-published in 2025 matches `updated_start: "2025-01-01"`. All four must be real calendar dates — `2026-02-31` and `2026-99-99` are rejected at input validation, and a reversed range fails with `invalid_date_range` rather than silently returning nothing
+- Client-side limit (1–200, default 20) and `offset` (default 0) applied after fetching all matching records. Page with `offset: 0, 20, 40`; an offset at or past `total_found` returns an empty result set rather than an error
+- `total_found` counts matches after `hazard_search` is applied and before `offset`/`limit` narrow the window; `has_more` is the paging signal; `truncated` stays limit-only and does not move with `offset`
 - Returns hazard descriptions, remedy options, remedy instructions, product list, UPCs, manufacturer/importer/retailer names, images, and the CPSC recall page URL
 - Manufacturer and importer are reported and rendered as separate roles — CPSC org names contain commas, so multiple orgs in one role are separated with `; `
 - Per-recall `data_quality_notes` records gaps in the upstream record (no hazard text, no product entries); empty when nothing is missing
-- Includes `total_found` and `truncated` fields for pagination awareness
-- Note: the `Hazard` filter param is non-functional in the upstream API — use `description_search` for hazard-type keywords like "fire", "choking", or "burn"
-- When `manufacturer` returns no results, try `importer` or `retailer` — many recalls list the importer as the primary organization
+- When `manufacturer` returns no results, try `importer`, `retailer`, or `distributor` — many recalls list one of those as the primary organization
+- Deterministic upstream rejections surface as `upstream_rejected` (`retryable: false`) and carry the CPSC message; transient outages stay on `upstream_error` (`retryable: true`)
 
 ---
 
@@ -76,7 +79,8 @@ Full detail for a single CPSC recall by recall number.
 Fetch the most recent CPSC recalls, ordered newest-first.
 
 - Configurable look-back window of 1–365 days (default 30)
-- Limit of 1–100 results (default 20)
+- Limit of 1–100 results (default 20), with `offset` (default 0) to page through `total_found`. Narrowing `days` cannot page — the window is anchored to today, so shrinking it drops the oldest records rather than advancing past the newest
+- `has_more` is the paging signal; `truncated` stays limit-only and does not move with `offset`
 - Always applies a date window — without one, the upstream API returns 9,800+ records
 - Returns a lightweight record per recall: number, date, title, hazards, remedy types, product names, and CPSC URL
 - Per-recall `data_quality_notes` records gaps in the upstream record (no hazard text, no product entries); empty when nothing is missing
@@ -102,7 +106,7 @@ CPSC-specific:
 Agent-friendly output:
 
 - Jurisdiction note on every response — agents can route callers to the correct agency (FDA, NHTSA, USCG, EPA) when the product is out of scope
-- `total_found` + `truncated` fields on search/recent responses — agents can detect when results are clipped and suggest narrowing filters
+- `total_found`, `offset`, `has_more`, and `truncated` fields on search/recent responses — agents can tell when results are clipped and page through the rest with `offset`
 - `cpsc_url` on every recall — authoritative source link for consumer verification
 - `source_note` on every response, plus `(CPSC source text)` labels and blockquotes in the rendered output — relayed CPSC narrative is marked as source data, distinct from the server's own guidance
 - `data_quality_notes` on every response — gaps observed in the upstream record, derived from which fields CPSC left empty rather than any judgement about the recall

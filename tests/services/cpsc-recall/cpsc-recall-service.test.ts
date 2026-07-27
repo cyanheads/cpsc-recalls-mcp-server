@@ -94,6 +94,45 @@ describe('CpscRecallService', () => {
     await expect(service.getByNumber('99999', ctx)).resolves.toBeNull();
   });
 
+  it('forwards every declared search parameter to the upstream query string', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([]));
+
+    await service.search(
+      {
+        ProductName: 'crib',
+        Manufacturer: 'ACME',
+        Retailer: 'Target',
+        Importer: 'Import Co',
+        Distributor: 'Walmart',
+        RecallTitle: 'chandelier',
+        RecallDescription: 'overheating',
+        Remedy: 'repair',
+        RecallDateStart: '2020-01-01',
+        RecallDateEnd: '2021-01-01',
+        LastPublishDateStart: '2025-01-01',
+        LastPublishDateEnd: '2026-01-01',
+      },
+      ctx,
+    );
+
+    const url = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      format: 'json',
+      ProductName: 'crib',
+      Manufacturer: 'ACME',
+      Retailer: 'Target',
+      Importer: 'Import Co',
+      Distributor: 'Walmart',
+      RecallTitle: 'chandelier',
+      RecallDescription: 'overheating',
+      Remedy: 'repair',
+      RecallDateStart: '2020-01-01',
+      RecallDateEnd: '2021-01-01',
+      LastPublishDateStart: '2025-01-01',
+      LastPublishDateEnd: '2026-01-01',
+    });
+  });
+
   it('rejects the error row on the getRecent path too', async () => {
     mockFetch.mockResolvedValue(jsonResponse([cpscErrorRow]));
 

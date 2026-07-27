@@ -3,6 +3,7 @@
  * @module tests/tools/cpsc-get-recent.tool.test
  */
 
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
@@ -43,7 +44,10 @@ const makeRaw = (overrides?: Record<string, unknown>) => ({
 });
 
 /** A single-recall result matching the output schema, for exercising format() directly. */
-const makeFormatResult = (recallOverrides?: Record<string, unknown>) => ({
+const makeFormatResult = (
+  recallOverrides?: Record<string, unknown>,
+  resultOverrides?: Record<string, unknown>,
+) => ({
   recalls: [
     {
       recall_number: '25043',
@@ -60,9 +64,12 @@ const makeFormatResult = (recallOverrides?: Record<string, unknown>) => ({
   period: { start: '2025-03-01', end: '2025-03-31', days: 30 },
   total_found: 1,
   truncated: false,
+  offset: 0,
+  has_more: false,
   cpsc_jurisdiction: 'CPSC covers consumer products.',
   source_note:
     'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+  ...resultOverrides,
 });
 
 vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
@@ -192,6 +199,120 @@ describe('cpsc_get_recent', () => {
       const text = cpscGetRecent.format(makeFormatResult())[0].text;
 
       expect(text).toContain('CPSC source fields:\nHazard: Fire hazard');
+    });
+  });
+
+  describe('offset paging', () => {
+    /** Ten distinguishable recalls, numbered 30000..30009. */
+    const tenRaws = () =>
+      Array.from({ length: 10 }, (_, i) => makeRaw({ RecallNumber: `3000${i}` }));
+
+    it('returns the second page for offset + limit', async () => {
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const input = cpscGetRecent.input.parse({ limit: 3, offset: 3 });
+      const result = await cpscGetRecent.handler(input, ctx);
+
+      expect(result.recalls.map((r) => r.recall_number)).toEqual(['30003', '30004', '30005']);
+      expect(result.total_found).toBe(10);
+      expect(result.offset).toBe(3);
+      expect(result.has_more).toBe(true);
+    });
+
+    it('returns an empty page (not an error) for an offset past total_found', async () => {
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const input = cpscGetRecent.input.parse({ limit: 5, offset: 50 });
+      const result = await cpscGetRecent.handler(input, ctx);
+
+      expect(result.recalls).toEqual([]);
+      expect(result.total_found).toBe(10);
+      expect(result.offset).toBe(50);
+      expect(result.has_more).toBe(false);
+    });
+
+    it('sets has_more false on the final page and true on every earlier page', async () => {
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const first = await cpscGetRecent.handler(
+        cpscGetRecent.input.parse({ limit: 5, offset: 0 }),
+        ctx,
+      );
+      expect(first.has_more).toBe(true);
+
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const last = await cpscGetRecent.handler(
+        cpscGetRecent.input.parse({ limit: 5, offset: 5 }),
+        ctx,
+      );
+      expect(last.recalls).toHaveLength(5);
+      expect(last.has_more).toBe(false);
+    });
+
+    it('keeps truncated limit-only and offset-independent', async () => {
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const paged = await cpscGetRecent.handler(
+        cpscGetRecent.input.parse({ limit: 5, offset: 5 }),
+        ctx,
+      );
+      expect(paged.has_more).toBe(false);
+      expect(paged.truncated).toBe(true);
+
+      mockGetRecent.mockResolvedValueOnce(tenRaws());
+      const wide = await cpscGetRecent.handler(
+        cpscGetRecent.input.parse({ limit: 20, offset: 5 }),
+        ctx,
+      );
+      expect(wide.truncated).toBe(false);
+    });
+
+    it('defaults offset to 0 and rejects a negative offset', async () => {
+      mockGetRecent.mockResolvedValueOnce([makeRaw()]);
+      const result = await cpscGetRecent.handler(cpscGetRecent.input.parse({}), ctx);
+      expect(result.offset).toBe(0);
+      expect(() => cpscGetRecent.input.parse({ offset: -1 })).toThrow();
+    });
+
+    it('format surfaces the window and the next-page call', () => {
+      const paged = cpscGetRecent.format(
+        makeFormatResult(undefined, {
+          total_found: 40,
+          truncated: true,
+          offset: 20,
+          has_more: true,
+        }),
+      )[0].text;
+      expect(paged).toContain('Found 40 recalls, showing 1 from offset 20 (truncated by limit).');
+      expect(paged).toContain('More available — repeat with offset 21.');
+
+      const single = cpscGetRecent.format(makeFormatResult())[0].text;
+      expect(single).toContain('Found 1 recall.');
+      expect(single).not.toContain('More available');
+    });
+  });
+
+  describe('upstream error classification', () => {
+    it('routes a non-retryable service error to upstream_rejected', async () => {
+      mockGetRecent.mockRejectedValueOnce(
+        new McpError(
+          JsonRpcErrorCode.ServiceUnavailable,
+          'CPSC API returned an error row instead of recall records: Invalid date format.',
+          { retryable: false },
+        ),
+      );
+      await expect(cpscGetRecent.handler(cpscGetRecent.input.parse({}), ctx)).rejects.toMatchObject(
+        {
+          message: 'CPSC API returned an error row instead of recall records: Invalid date format.',
+          data: { reason: 'upstream_rejected', retryable: false },
+        },
+      );
+    });
+
+    it('keeps a transient service error on upstream_error and carries the upstream message', async () => {
+      mockGetRecent.mockRejectedValueOnce(new Error('timeout'));
+      await expect(cpscGetRecent.handler(cpscGetRecent.input.parse({}), ctx)).rejects.toMatchObject(
+        {
+          message: 'CPSC API request failed: timeout',
+          data: { reason: 'upstream_error', retryable: true },
+        },
+      );
     });
   });
 });

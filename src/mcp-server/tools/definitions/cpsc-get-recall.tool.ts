@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** Static jurisdiction note included in every response. */
@@ -92,7 +92,9 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     remedy_options: z
       .array(z.string().describe('Remedy type.'))
       .describe(
-        'Remedy types available: Refund, Repair, Replace, Dispose, Label, New Instructions.',
+        'Remedy types available: Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, Inspect. ' +
+          'Often empty — CPSC classified the remedy on fewer than half its records. Read remedy_instructions when this is empty, ' +
+          'and fall back to cpsc_url when that is empty too, rather than reporting that no remedy exists.',
       ),
     remedy_instructions: z
       .string()
@@ -186,9 +188,17 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The saferproducts.gov API returned an error or timed out',
+      when: 'The saferproducts.gov API returned a transient error or timed out',
       recovery: 'The CPSC API is occasionally unavailable. Retry in a few seconds.',
       retryable: true,
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'The saferproducts.gov API answered with an error row instead of a recall record, which the same request will always produce',
+      recovery:
+        'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then confirm the recall number with cpsc_search_recalls.',
+      retryable: false,
     },
   ],
 
@@ -200,9 +210,18 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     try {
       raw = await svc.getByNumber(input.recall_number, ctx);
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      if (err instanceof McpError && err.data?.retryable === false) {
+        throw ctx.fail(
+          'upstream_rejected',
+          detail,
+          { ...ctx.recoveryFor('upstream_rejected') },
+          { cause: err },
+        );
+      }
       throw ctx.fail(
         'upstream_error',
-        'CPSC API request failed.',
+        `CPSC API request failed: ${detail}`,
         { ...ctx.recoveryFor('upstream_error') },
         { cause: err },
       );
