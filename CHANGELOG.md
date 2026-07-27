@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-07-27
+
+Reject impossible dates and sentinel error rows, fix null-Description and manufacturer/importer rendering, frame CPSC narrative as source text; mcp-ts-core ^0.11.0, TypeScript ^7.0.2
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-20
 
 Maintenance: @cyanheads/mcp-ts-core ^0.10.6 → ^0.10.9; plugin-manifest packaging checks enabled; biome 2.5, @types/node 26, vitest 4.1.9 refresh

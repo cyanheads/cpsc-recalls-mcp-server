@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 10:53:57
+Generated on: 2026-07-27 09:10:40
 
 ```text
 cpsc-recalls-mcp-server/
@@ -12,10 +12,12 @@ cpsc-recalls-mcp-server/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -145,12 +147,16 @@ cpsc-recalls-mcp-server/
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
+│   ├── services/
+│   │   └── cpsc-recall/
+│   │       └── cpsc-recall-service.test.ts
 │   └── tools/
 │       ├── cpsc-get-recall.tool.test.ts
 │       ├── cpsc-get-recent.tool.test.ts
 │       └── cpsc-search-recalls.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md
@@ -158,6 +164,7 @@ cpsc-recalls-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile
