@@ -1,6 +1,6 @@
 {
   "name": "cpsc-recalls-mcp-server",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"
