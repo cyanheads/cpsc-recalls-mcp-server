@@ -1,12 +1,14 @@
 # CPSC Recalls MCP Server — Design
 
+This records the design as reasoned before the build, kept for its rationale. Where a decision has since been revisited, the entry carries a **Superseded** note rather than being rewritten. The tool schemas in `src/mcp-server/tools/definitions/` are the authority on as-built behavior.
+
 ## MCP Surface
 
 ### Tools
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `cpsc_search_recalls` | Search consumer product recalls by product name, brand/manufacturer, retailer, hazard description, or date range. Primary lookup tool. | `product_name`, `manufacturer`, `retailer`, `hazard`, `date_start`, `date_end`, `limit` | `readOnlyHint`, `idempotentHint` |
+| `cpsc_search_recalls` | Search consumer product recalls by product name, brand/manufacturer, retailer, hazard description, or date range. Primary lookup tool. | `product_name`, `manufacturer`, `retailer`, `hazard`, `date_start`, `date_end`, `limit` — as built, `hazard` is `hazard_search` (client-side) and the tool also takes `importer`, `description_search`, `title_search`, `distributor`, `remedy`, `updated_start`, `updated_end`, `offset` | `readOnlyHint`, `idempotentHint` |
 | `cpsc_get_recall` | Full detail for a single recall by recall number. Returns hazard, remedy, all product variants, incident reports, images, and the CPSC recall URL. | `recall_number` | `readOnlyHint`, `idempotentHint` |
 | `cpsc_get_recent` | Most recent CPSC recalls, ordered newest-first. Scoped to a date window (defaults last 30 days). Quick feed for "what's been recalled lately?" | `days`, `limit` | `readOnlyHint` |
 
@@ -485,18 +487,18 @@ Each method:
 | Recall | `RecallNumber` | Direct lookup — exact recall number string (5-digit for 2002+; `\d{5}[a-d]` for 1998–2001 historical records) |
 | Product | `ProductName` | Substring match in product name |
 | Brand/Org | `Manufacturer`, `Retailer`, `Importer` | Substring matches against separate arrays; try all three if a brand appears in multiple roles |
-| Hazard | `RecallDescription` | `Hazard` param is documented but verified to return 0 results — use description search with hazard keywords instead |
+| Hazard | `RecallDescription` | `Hazard` param is documented but verified to return 0 results — use description search with hazard keywords instead. **Superseded:** hazard matching is now the client-side `hazard_search` input over hazard names, product names, and remedy text; `description_search` remains the narrow `RecallDescription` filter |
 | Date | `RecallDateStart`, `RecallDateEnd` | ISO 8601 date strings |
 
 ---
 
 ## Known Limitations
 
-1. **No pagination** — the API returns all matching records at once. For broad queries (e.g., `Retailer=Walmart` returns 476 records), the tool applies a client-side `limit`. Agents that need the full set should narrow by date range.
+1. **No pagination** — the API returns all matching records at once. For broad queries (e.g., `Retailer=Walmart` returns 476 records), the tool applies a client-side `limit`. Agents that need the full set should narrow by date range. **Superseded:** the upstream API still has no pagination, but `cpsc_search_recalls` and `cpsc_get_recent` take an `offset` and report `has_more`, so the full matching set is reachable by paging the client-side window instead of guessing a date boundary.
 
 2. **`Products[].Model` is almost always empty** — model numbers are embedded in the recall `Description` text rather than a structured field. Matching by specific model number requires description text search (`description_search`), not a dedicated `model` parameter. The design note to "match by model/UPC" is partially satisfied: UPCs are structured (when present); model matching depends on description search. Make this explicit in the tool description so agents don't assume a structured model lookup is possible.
 
-3. **`Hazard` filter doesn't work** — verified against the live API: `Hazard=fire` and `Hazard=Fire` both return 0 results despite being a documented parameter. Hazard-type filtering must use `RecallDescription` with hazard keywords.
+3. **`Hazard` filter doesn't work** — verified against the live API: `Hazard=fire` and `Hazard=Fire` both return 0 results despite being a documented parameter. Hazard-type filtering must use `RecallDescription` with hazard keywords. **Superseded:** the upstream param is still dead, but hazard filtering no longer routes through `RecallDescription` — `hazard_search` matches client-side against hazard names, product names, and remedy text.
 
 4. **Retailers/manufacturers as narrative strings** — retailer and manufacturer fields contain prose (e.g., "In-store at Target, Macy's, and Snappy and online at Target.com from February 2025 through February 2026 for about $130"). These are not structured, but they contain useful sale date and price context.
 
@@ -539,8 +541,8 @@ No tool makes more than one upstream call. The API design makes multi-call workf
 | Decision | Rationale |
 |:---------|:----------|
 | Three tools, not one | `search` + `get` + `recent` follow a clear two-hop workflow: discover → detail. `recent` is a distinct UX pattern (heartbeat feed, no search intent) that merits its own ergonomic entry point. Collapsing into one `search` tool with a `mode` enum would add complexity with no gain. |
-| Hazard filter uses `description_search` not `Hazard` param | Live API probing confirmed the `Hazard` query param returns 0 results for all tested values ("fire", "Fire", "choking"). `RecallDescription` keyword search works and is documented as such. The dead param is not exposed. |
-| No `Hazard` param despite it being documented | Same as above — verified broken, misleading to expose, replaced with `description_search`. |
+| Hazard filter uses `description_search` not `Hazard` param | Live API probing confirmed the `Hazard` query param returns 0 results for all tested values ("fire", "Fire", "choking"). `RecallDescription` keyword search works and is documented as such. The dead param is not exposed. **Superseded:** the dead param stays unexposed, but `description_search` is no longer the hazard path — `hazard_search` filters client-side, which reaches hazard names and product names that `RecallDescription` cannot. |
+| No `Hazard` param despite it being documented | Same as above — verified broken, misleading to expose, replaced with `description_search`. **Superseded:** replaced with `hazard_search`. |
 | Output leads with hazard + remedy | Matches the idea.md design note. An agent parsing a recall summary needs the answer to "what's dangerous and what do I do?" first, not the catalog of model numbers. |
 | Model number matching is explicit about its limitations | The idea.md notes to match by "model/UPC, not just product name" — but `Products[].Model` is almost always empty in practice. The tool descriptions and Known Limitations make this explicit so agents use `description_search` for model-level matching. |
 | `cpsc_jurisdiction` in every output | Every response includes the jurisdiction boundary string. Agents answering product-safety questions need to know when to route to `openfda` or `nhtsa`. Embedding it in the response (not just the description) ensures it reaches both `structuredContent` and `content[]` surfaces. |
