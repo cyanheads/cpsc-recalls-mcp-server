@@ -3,8 +3,9 @@
  * @module tests/tools/cpsc-get-recall.tool.test
  */
 
+import type { HandlerContext, ReasonOf } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
 
@@ -81,8 +82,23 @@ vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
 
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
+/** The tool's declared error contract types the `ctx` its handler receives. */
+type GetRecallContext = HandlerContext<ReasonOf<typeof cpscGetRecall.errors>>;
+
+/** Content blocks are a union; narrow to the text channel before asserting on it. */
+const textOf = (blocks: ReadonlyArray<{ type: string; text?: string }>): string =>
+  blocks.map((block) => (block.type === 'text' ? (block.text ?? '') : '')).join('');
+
+/** The text channel `format()` alone produces. */
+const formatText = (result: Parameters<NonNullable<typeof cpscGetRecall.format>>[0]): string =>
+  textOf(cpscGetRecall.format!(result));
+
+/** The text channel of a full wire result. */
+const wireText = (result: { content?: ReadonlyArray<{ type: string; text?: string }> }): string =>
+  textOf(result.content ?? []);
+
 describe('cpsc_get_recall', () => {
-  let ctx: ReturnType<typeof createMockContext>;
+  let ctx: GetRecallContext;
   const mockGetByNumber = vi.fn();
 
   beforeEach(() => {
@@ -163,8 +179,7 @@ describe('cpsc_get_recall', () => {
   });
 
   it('format renders hazard, remedy, products, images', () => {
-    const blocks = cpscGetRecall.format(makeFormatResult());
-    const text = blocks[0].text;
+    const text = formatText(makeFormatResult());
     expect(text).toContain('⚠️ Hazard');
     expect(text).toContain('Fire hazard');
     expect(text).toContain('✅ Remedy');
@@ -212,7 +227,7 @@ describe('cpsc_get_recall', () => {
 
     it('renders a visible placeholder instead of a blank Description section', () => {
       for (const description of [null, '', '   ']) {
-        const text = cpscGetRecall.format(makeFormatResult({ description }))[0].text;
+        const text = formatText(makeFormatResult({ description }));
         const section = text.slice(text.indexOf('## Description'));
 
         expect(section).toContain('_Not provided by CPSC._');
@@ -220,9 +235,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('renders the description as quoted CPSC source text when present', () => {
-      const text = cpscGetRecall.format(
-        makeFormatResult({ description: 'Line one.\nLine two.' }),
-      )[0].text;
+      const text = formatText(makeFormatResult({ description: 'Line one.\nLine two.' }));
 
       expect(text).toContain('## Description (CPSC source text)');
       expect(text).toContain('> Line one.\n> Line two.');
@@ -234,9 +247,9 @@ describe('cpsc_get_recall', () => {
     const importerWithCommas = 'Baituo Innovation Technology Co. Ltd., dba Romorgniz, of China';
 
     it('gives each role its own heading when both are populated', () => {
-      const text = cpscGetRecall.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: ['ACME Corp'], importers: [importerWithCommas] }),
-      )[0].text;
+      );
 
       expect(text).toContain('## Manufactured By\n- ACME Corp');
       expect(text).toContain(`## Imported By\n- ${importerWithCommas}`);
@@ -244,27 +257,25 @@ describe('cpsc_get_recall', () => {
     });
 
     it('renders only the manufacturer heading when there is no importer', () => {
-      const text = cpscGetRecall.format(
-        makeFormatResult({ manufacturers: ['ACME Corp'], importers: [] }),
-      )[0].text;
+      const text = formatText(makeFormatResult({ manufacturers: ['ACME Corp'], importers: [] }));
 
       expect(text).toContain('## Manufactured By');
       expect(text).not.toContain('## Imported By');
     });
 
     it('renders only the importer heading when there is no manufacturer', () => {
-      const text = cpscGetRecall.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: [], importers: [importerWithCommas] }),
-      )[0].text;
+      );
 
       expect(text).toContain('## Imported By');
       expect(text).not.toContain('## Manufactured By');
     });
 
     it('still renders country of origin when neither role is populated', () => {
-      const text = cpscGetRecall.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: [], importers: [], manufacturer_countries: ['China'] }),
-      )[0].text;
+      );
 
       expect(text).toContain('Country of origin: China');
     });
@@ -295,10 +306,10 @@ describe('cpsc_get_recall', () => {
     });
 
     it('renders the notes section only when notes exist, and always the source caveat', () => {
-      const withNotes = cpscGetRecall.format(
+      const withNotes = formatText(
         makeFormatResult({ data_quality_notes: ['CPSC listed no hazard description.'] }),
-      )[0].text;
-      const withoutNotes = cpscGetRecall.format(makeFormatResult())[0].text;
+      );
+      const withoutNotes = formatText(makeFormatResult());
 
       expect(withNotes).toContain('## Data quality (server-assessed)');
       expect(withNotes).toContain('- CPSC listed no hazard description.');
@@ -308,7 +319,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('marks relayed narrative fields as CPSC source text', () => {
-      const text = cpscGetRecall.format(makeFormatResult())[0].text;
+      const text = formatText(makeFormatResult());
 
       expect(text).toContain('Quoted blocks below are CPSC source text, relayed unedited.');
       expect(text).toContain('**⚠️ Hazard (CPSC source text):**\n> Fire hazard');
@@ -319,7 +330,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('separates every quoted block from the guidance that follows it', () => {
-      const text = cpscGetRecall.format(makeFormatResult())[0].text;
+      const text = formatText(makeFormatResult());
       const lines = text.split('\n');
 
       /**
@@ -331,6 +342,61 @@ describe('cpsc_get_recall', () => {
         if (!line.startsWith('>') || next === undefined) continue;
         expect(next.startsWith('>') || next === '').toBe(true);
       }
+    });
+  });
+  /**
+   * The wire envelope both client families read: `structuredContent` and the
+   * `content[]` text channel must carry the same facts on success, and the same
+   * reason plus recovery hint on failure.
+   */
+  describe('wire contract', () => {
+    it('carries the record on structuredContent and in the text channel', async () => {
+      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        recall_number: '25043',
+        title: 'ACME Widget Recall',
+        remedy_options: ['Refund'],
+      });
+      expect(() => cpscGetRecall.output.parse(result.structuredContent)).not.toThrow();
+
+      const text = wireText(result);
+      expect(text).toContain('ACME Widget Recall');
+      expect(text).toContain('Fire hazard');
+      expect(text).toContain('012345678901');
+    });
+
+    it('reports not_found with its recovery hint on both surfaces', async () => {
+      mockGetByNumber.mockResolvedValueOnce(null);
+      const result = await runToolContract(cpscGetRecall, { recall_number: '99999' });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          data: { reason: 'not_found', recovery: { hint: expect.stringContaining('25043') } },
+        },
+      });
+      expect(wireText(result)).toContain('cpsc_search_recalls');
+    });
+
+    it('rejects an argument key the input schema does not declare', async () => {
+      const result = await runToolContract(cpscGetRecall, {
+        recall_number: '25043',
+        recallNumber: '25043',
+      } as never);
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining('recallNumber'),
+        },
+      });
+      expect(wireText(result)).toContain('recallNumber');
+      expect(mockGetByNumber).not.toHaveBeenCalled();
     });
   });
 });

@@ -3,8 +3,9 @@
  * @module tests/tools/cpsc-search-recalls.tool.test
  */
 
+import type { HandlerContext, ReasonOf } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscSearchRecalls } from '@/mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
 
@@ -85,8 +86,23 @@ vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
 
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
+/** The tool's declared error contract types the `ctx` its handler receives. */
+type SearchRecallsContext = HandlerContext<ReasonOf<typeof cpscSearchRecalls.errors>>;
+
+/** Content blocks are a union; narrow to the text channel before asserting on it. */
+const textOf = (blocks: ReadonlyArray<{ type: string; text?: string }>): string =>
+  blocks.map((block) => (block.type === 'text' ? (block.text ?? '') : '')).join('');
+
+/** The text channel `format()` alone produces. */
+const formatText = (result: Parameters<NonNullable<typeof cpscSearchRecalls.format>>[0]): string =>
+  textOf(cpscSearchRecalls.format!(result));
+
+/** The text channel of a full wire result. */
+const wireText = (result: { content?: ReadonlyArray<{ type: string; text?: string }> }): string =>
+  textOf(result.content ?? []);
+
 describe('cpsc_search_recalls', () => {
-  let ctx: ReturnType<typeof createMockContext>;
+  let ctx: SearchRecallsContext;
   const mockSearch = vi.fn();
 
   beforeEach(() => {
@@ -103,7 +119,7 @@ describe('cpsc_search_recalls', () => {
     expect(result.total_found).toBe(1);
     expect(result.truncated).toBe(false);
     expect(result.recalls).toHaveLength(1);
-    const r = result.recalls[0];
+    const r = result.recalls[0]!;
     expect(r.recall_number).toBe('25043');
     expect(r.recall_date).toBe('2025-03-15');
     expect(r.title).toBe('ACME Widget Recall');
@@ -175,16 +191,15 @@ describe('cpsc_search_recalls', () => {
     const input = cpscSearchRecalls.input.parse({});
     const result = await cpscSearchRecalls.handler(input, ctx);
 
-    expect(result.recalls[0].products).toHaveLength(2);
+    expect(result.recalls[0]!.products).toHaveLength(2);
     // UPCs are recall-level — top-level field on the recall, not per-product
-    expect(result.recalls[0].upcs).toEqual(['012345678901', '012345678902']);
+    expect(result.recalls[0]!.upcs).toEqual(['012345678901', '012345678902']);
     // Products themselves have no upcs field
-    expect(result.recalls[0].products[0]).not.toHaveProperty('upcs');
+    expect(result.recalls[0]!.products[0]).not.toHaveProperty('upcs');
   });
 
   it('format renders hazard, remedy, and products', () => {
-    const blocks = cpscSearchRecalls.format(makeFormatResult());
-    const text = blocks[0].text;
+    const text = formatText(makeFormatResult());
     expect(text).toContain('Fire hazard');
     expect(text).toContain('Refund');
     expect(text).toContain('ACME Widget');
@@ -198,10 +213,10 @@ describe('cpsc_search_recalls', () => {
     mockSearch.mockResolvedValueOnce([raw]);
     const input = cpscSearchRecalls.input.parse({});
     const result = await cpscSearchRecalls.handler(input, ctx);
-    expect(result.recalls[0].hazards).toEqual([]);
-    expect(result.recalls[0].remedy_options).toEqual([]);
-    expect(result.recalls[0].remedy_summary).toBe('');
-    expect(result.recalls[0].manufacturers).toEqual([]);
+    expect(result.recalls[0]!.hazards).toEqual([]);
+    expect(result.recalls[0]!.remedy_options).toEqual([]);
+    expect(result.recalls[0]!.remedy_summary).toBe('');
+    expect(result.recalls[0]!.manufacturers).toEqual([]);
   });
 
   describe('date filter validation', () => {
@@ -246,9 +261,9 @@ describe('cpsc_search_recalls', () => {
     const importerWithCommas = 'Baituo Innovation Technology Co. Ltd., dba Romorgniz, of China';
 
     it('labels manufacturer and importer separately when both are populated', () => {
-      const text = cpscSearchRecalls.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: ['ACME Corp'], importers: [importerWithCommas] }),
-      )[0].text;
+      );
 
       expect(text).toContain('**Manufacturer:** ACME Corp');
       expect(text).toContain(`**Importer:** ${importerWithCommas}`);
@@ -256,35 +271,31 @@ describe('cpsc_search_recalls', () => {
     });
 
     it('renders only the manufacturer line when there is no importer', () => {
-      const text = cpscSearchRecalls.format(
-        makeFormatResult({ manufacturers: ['ACME Corp'], importers: [] }),
-      )[0].text;
+      const text = formatText(makeFormatResult({ manufacturers: ['ACME Corp'], importers: [] }));
 
       expect(text).toContain('**Manufacturer:** ACME Corp');
       expect(text).not.toContain('**Importer:**');
     });
 
     it('renders only the importer line when there is no manufacturer', () => {
-      const text = cpscSearchRecalls.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: [], importers: [importerWithCommas] }),
-      )[0].text;
+      );
 
       expect(text).toContain(`**Importer:** ${importerWithCommas}`);
       expect(text).not.toContain('**Manufacturer:**');
     });
 
     it('separates multiple orgs in one role with "; " so comma-bearing names stay parseable', () => {
-      const text = cpscSearchRecalls.format(
+      const text = formatText(
         makeFormatResult({ manufacturers: [importerWithCommas, 'ACME Corp'], importers: [] }),
-      )[0].text;
+      );
 
       expect(text).toContain(`**Manufacturer:** ${importerWithCommas}; ACME Corp`);
     });
 
     it('falls back to a combined "Not specified" line when neither role is populated', () => {
-      const text = cpscSearchRecalls.format(
-        makeFormatResult({ manufacturers: [], importers: [] }),
-      )[0].text;
+      const text = formatText(makeFormatResult({ manufacturers: [], importers: [] }));
 
       expect(text).toContain('**Manufacturer/Importer:** Not specified');
     });
@@ -296,7 +307,7 @@ describe('cpsc_search_recalls', () => {
       const input = cpscSearchRecalls.input.parse({});
       const result = await cpscSearchRecalls.handler(input, ctx);
 
-      expect(result.recalls[0].data_quality_notes).toEqual([
+      expect(result.recalls[0]!.data_quality_notes).toEqual([
         'CPSC listed no hazard description for this recall.',
         'CPSC listed no product entries for this recall.',
       ]);
@@ -308,14 +319,14 @@ describe('cpsc_search_recalls', () => {
       const input = cpscSearchRecalls.input.parse({});
       const result = await cpscSearchRecalls.handler(input, ctx);
 
-      expect(result.recalls[0].data_quality_notes).toEqual([]);
+      expect(result.recalls[0]!.data_quality_notes).toEqual([]);
     });
 
     it('renders notes only when present, and always renders the source caveat', () => {
-      const withNotes = cpscSearchRecalls.format(
+      const withNotes = formatText(
         makeFormatResult({ data_quality_notes: ['CPSC listed no hazard description.'] }),
-      )[0].text;
-      const withoutNotes = cpscSearchRecalls.format(makeFormatResult())[0].text;
+      );
+      const withoutNotes = formatText(makeFormatResult());
 
       expect(withNotes).toContain('**Data quality (server-assessed):**');
       expect(withNotes).toContain('CPSC listed no hazard description.');
@@ -339,7 +350,7 @@ describe('cpsc_search_recalls', () => {
       mockSearch.mockResolvedValueOnce([makeRaw()]);
       const input = cpscSearchRecalls.input.parse(overrides);
       await cpscSearchRecalls.handler(input, ctx);
-      return mockSearch.mock.calls[0][0] as Record<string, string>;
+      return mockSearch.mock.calls[0]![0] as Record<string, string>;
     };
 
     it('maps title_search to the upstream RecallTitle parameter', async () => {
@@ -488,7 +499,7 @@ describe('cpsc_search_recalls', () => {
       });
       await cpscSearchRecalls.handler(input, ctx);
 
-      expect(mockSearch.mock.calls[0][0]).toEqual({ ProductName: 'widget' });
+      expect(mockSearch.mock.calls[0]![0]).toEqual({ ProductName: 'widget' });
     });
 
     it('computes total_found after the filter, not from the raw upstream count', async () => {
@@ -624,31 +635,31 @@ describe('cpsc_search_recalls', () => {
     });
 
     it('format surfaces the offset and the next-page call', () => {
-      const paged = cpscSearchRecalls.format(
+      const paged = formatText(
         makeFormatResult(undefined, {
           total_found: 40,
           truncated: true,
           offset: 20,
           has_more: true,
         }),
-      )[0].text;
+      );
       expect(paged).toContain(
         'Showing 1 of 40 recalls (truncated by limit), starting at offset 20.',
       );
       expect(paged).toContain('More available — repeat with offset 21.');
 
-      const done = cpscSearchRecalls.format(
+      const done = formatText(
         makeFormatResult(undefined, {
           total_found: 40,
           truncated: true,
           offset: 39,
           has_more: false,
         }),
-      )[0].text;
+      );
       expect(done).toContain('starting at offset 39.');
       expect(done).not.toContain('More available');
 
-      const single = cpscSearchRecalls.format(makeFormatResult())[0].text;
+      const single = formatText(makeFormatResult());
       expect(single).toContain('Showing 1 of 1 recalls, starting at offset 0.');
       expect(single).not.toContain('truncated by limit');
     });
@@ -687,6 +698,99 @@ describe('cpsc_search_recalls', () => {
       await expect(cpscSearchRecalls.handler(input, ctx)).rejects.toMatchObject({
         data: { reason: 'upstream_error', retryable: true },
       });
+    });
+  });
+  /**
+   * The wire envelope both client families read: `structuredContent` and the
+   * `content[]` text channel must carry the same facts on success, and the same
+   * reason plus recovery hint on failure.
+   */
+  describe('wire contract', () => {
+    it('carries the window and its paging state on both surfaces', async () => {
+      mockSearch.mockResolvedValueOnce(
+        Array.from({ length: 5 }, (_, i) => makeRaw({ RecallNumber: `2504${i}` })),
+      );
+      const result = await runToolContract(cpscSearchRecalls, { product_name: 'widget', limit: 2 });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        total_found: 5,
+        truncated: true,
+        offset: 0,
+        has_more: true,
+      });
+      expect(() => cpscSearchRecalls.output.parse(result.structuredContent)).not.toThrow();
+
+      const text = wireText(result);
+      expect(text).toContain('Showing 2 of 5 recalls');
+      expect(text).toContain('repeat with offset 2');
+      expect(text).toContain('Fire hazard');
+    });
+
+    it('returns an empty page on both surfaces for an offset past total_found', async () => {
+      mockSearch.mockResolvedValueOnce([makeRaw()]);
+      const result = await runToolContract(cpscSearchRecalls, {
+        product_name: 'widget',
+        offset: 50,
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        total_found: 1,
+        offset: 50,
+        has_more: false,
+      });
+      expect(wireText(result)).toContain('Showing 0 of 1 recalls');
+    });
+
+    it('reports no_results with its recovery hint on both surfaces', async () => {
+      mockSearch.mockResolvedValueOnce([]);
+      const result = await runToolContract(cpscSearchRecalls, { product_name: 'nothing' });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          data: {
+            reason: 'no_results',
+            recovery: { hint: expect.stringContaining('Broaden the search') },
+          },
+        },
+      });
+      expect(wireText(result)).toContain('Broaden the search');
+    });
+
+    it('reports invalid_date_range with its recovery hint on both surfaces', async () => {
+      const result = await runToolContract(cpscSearchRecalls, {
+        date_start: '2026-06-01',
+        date_end: '2026-01-01',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'invalid_date_range' },
+        },
+      });
+      expect(wireText(result)).toContain('Swap the two dates');
+      expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it('rejects an argument key the input schema does not declare', async () => {
+      const result = await runToolContract(cpscSearchRecalls, {
+        product_name: 'widget',
+        hazard: 'fire',
+      } as never);
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.ValidationError,
+          message: expect.stringContaining('hazard'),
+        },
+      });
+      expect(mockSearch).not.toHaveBeenCalled();
     });
   });
 });

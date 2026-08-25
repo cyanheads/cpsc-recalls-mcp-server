@@ -50,6 +50,10 @@ const jsonResponse = (body: unknown) =>
     headers: { 'content-type': 'application/json' },
   });
 
+/** An HTTP 200 carrying something other than a JSON array of recalls. */
+const textResponse = (body: string, contentType = 'text/html') =>
+  new Response(body, { status: 200, headers: { 'content-type': contentType } });
+
 describe('CpscRecallService', () => {
   let ctx: ReturnType<typeof createMockContext>;
   let service: CpscRecallService;
@@ -137,5 +141,73 @@ describe('CpscRecallService', () => {
     mockFetch.mockResolvedValue(jsonResponse([cpscErrorRow]));
 
     await expect(service.getRecent('2026-01-01', '2026-02-01', ctx)).rejects.toThrow(/error row/);
+  });
+
+  /**
+   * Each shape is classified transient, so the retry boundary spends its full
+   * budget before the message reaches the caller. A fresh `Response` per attempt
+   * is required — one instance's body is consumed by the first read.
+   */
+  describe('non-recall HTTP 200 bodies', () => {
+    const cases = [
+      {
+        name: 'an HTML error page served as a 200',
+        body: () => textResponse('<!DOCTYPE html>\n<html><body>Service unavailable</body></html>'),
+        expected: /HTML instead of JSON/,
+      },
+      {
+        name: 'a body that is not JSON at all',
+        body: () => textResponse('not json', 'text/plain'),
+        expected: /unparseable response/,
+      },
+      {
+        name: 'valid JSON that is not an array',
+        body: () => jsonResponse({ message: 'nope' }),
+        expected: /not a JSON array/,
+      },
+    ];
+
+    for (const { name, body, expected } of cases) {
+      it(`retries then rejects ${name}`, async () => {
+        mockFetch.mockImplementation(() => Promise.resolve(body()));
+
+        await expect(service.search({ ProductName: 'crib' }, ctx)).rejects.toThrow(expected);
+        // Default budget: the initial call plus three retries.
+        expect(mockFetch).toHaveBeenCalledTimes(4);
+      });
+    }
+  });
+
+  describe('retry boundary', () => {
+    it('retries a transient network failure and returns the eventual success', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('socket hang up'))
+        .mockResolvedValueOnce(jsonResponse([genuineRecord]));
+
+      const results = await service.search({ ProductName: 'toy' }, ctx);
+
+      expect(results).toHaveLength(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a transient failure on the getByNumber path too', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('socket hang up'))
+        .mockResolvedValueOnce(jsonResponse([genuineRecord]));
+
+      await expect(service.getByNumber('04084', ctx)).resolves.toMatchObject({
+        RecallNumber: '04084',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("forwards the handler's abort signal to fetch", async () => {
+      mockFetch.mockResolvedValue(jsonResponse([]));
+
+      await service.search({ ProductName: 'toy' }, ctx);
+
+      const init = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
   });
 });

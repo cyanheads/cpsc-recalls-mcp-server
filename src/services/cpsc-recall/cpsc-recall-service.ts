@@ -6,7 +6,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { fetchWithTimeout, requestContextService, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import type { CpscSearchParams, RawRecall } from './types.js';
 
 const BASE_URL = 'https://www.saferproducts.gov/RestWebServices/Recall';
@@ -80,13 +80,9 @@ export class CpscRecallService {
   }
 
   private fetchRecalls(url: string, ctx: Context): Promise<RawRecall[]> {
-    const reqCtx = requestContextService.createRequestContext({
-      operation: 'CpscRecallService.fetchRecalls',
-      requestId: ctx.requestId,
-    });
     return withRetry(
       async () => {
-        const response = await fetchWithTimeout(url, TIMEOUT_MS, reqCtx, {
+        const response = await fetchWithTimeout(url, TIMEOUT_MS, ctx, {
           signal: ctx.signal,
         });
         const text = await response.text();
@@ -121,7 +117,7 @@ export class CpscRecallService {
       },
       {
         operation: 'CpscRecallService.fetchRecalls',
-        context: reqCtx,
+        context: ctx,
         baseDelayMs: 500,
         signal: ctx.signal,
       },
