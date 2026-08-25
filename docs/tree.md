@@ -1,11 +1,9 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-07-27 09:10:40
+Generated on: 2026-08-25 05:15:27
 
 ```text
 cpsc-recalls-mcp-server/
-├── .agents/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -16,6 +14,8 @@ cpsc-recalls-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
