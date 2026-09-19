@@ -398,7 +398,7 @@ describe('cpsc_get_recent', () => {
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({
         error: {
-          code: JsonRpcErrorCode.ValidationError,
+          code: JsonRpcErrorCode.InvalidParams,
           message: expect.stringContaining('page'),
         },
       });

@@ -13,6 +13,12 @@ import { initCpscRecallService } from './services/cpsc-recall/cpsc-recall-servic
 await createApp({
   name: 'cpsc-recalls-mcp-server',
   title: 'cpsc-recalls-mcp-server',
+  /**
+   * Every tool is a single-shot read against the CPSC API — nothing gates on
+   * `ctx.requestInput`, so no caller needs a session to answer a mid-handler prompt.
+   * `MCP_SESSION_MODE` still overrides this at deploy time.
+   */
+  sessionMode: 'stateless',
   tools: [cpscSearchRecalls, cpscGetRecall, cpscGetRecent],
   resources: [],
   prompts: [],

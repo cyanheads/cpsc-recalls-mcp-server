@@ -34,6 +34,13 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
     'Use cpsc_get_recall with a recall_number from results to retrieve the full record including complete description, all images, and incident reports.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
+  /**
+   * `Hazard` is the upstream CPSC query parameter, so a caller working from the
+   * saferproducts.gov API docs reaches for that spelling. It maps one-to-one onto
+   * `hazard_search`, the working replacement for a parameter CPSC never matches.
+   */
+  inputAliases: { hazard: 'hazard_search' },
+
   input: z.object({
     product_name: z
       .string()

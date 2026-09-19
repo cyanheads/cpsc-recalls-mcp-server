@@ -391,7 +391,7 @@ describe('cpsc_get_recall', () => {
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({
         error: {
-          code: JsonRpcErrorCode.ValidationError,
+          code: JsonRpcErrorCode.InvalidParams,
           message: expect.stringContaining('recallNumber'),
         },
       });

@@ -780,17 +780,26 @@ describe('cpsc_search_recalls', () => {
     it('rejects an argument key the input schema does not declare', async () => {
       const result = await runToolContract(cpscSearchRecalls, {
         product_name: 'widget',
-        hazard: 'fire',
+        sort_by: 'date',
       } as never);
 
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({
         error: {
-          code: JsonRpcErrorCode.ValidationError,
-          message: expect.stringContaining('hazard'),
+          code: JsonRpcErrorCode.InvalidParams,
+          message: expect.stringContaining('sort_by'),
         },
       });
       expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it("accepts the upstream 'hazard' spelling as an alias for hazard_search", async () => {
+      mockSearch.mockResolvedValueOnce([makeRaw()]);
+      const result = await runToolContract(cpscSearchRecalls, { hazard: 'fire' } as never);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ total_found: 1 });
+      expect(mockSearch).toHaveBeenCalledTimes(1);
     });
   });
 });
