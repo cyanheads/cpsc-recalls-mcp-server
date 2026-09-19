@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-09-19 · ⚠️ Breaking
+
+Adopts mcp-ts-core 0.13.6 — the server declares a stateless session posture, cpsc_search_recalls accepts 'hazard' as an alias for hazard_search, and the Bun engine floor rises to 1.4.0, which breaks on older Bun runtimes.
+
 ## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-08-24
 
 Adopts mcp-ts-core 0.12.3 and MCP SDK v2 — the HTTP endpoint serves protocol revision 2026-07-28 alongside the 2025 era, tool inputs are strict so an undeclared argument key is rejected instead of ignored, and HTTP session mode is now stateless explicitly.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cpsc-recalls-mcp-server",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",

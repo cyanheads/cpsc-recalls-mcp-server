@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/cpsc-recalls-mcp-server",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "mcpName": "io.github.cyanheads/cpsc-recalls-mcp-server",
   "description": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.",
   "type": "module",
