@@ -1,13 +1,25 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cpsc-recalls-mcp-server",
   "version": "0.1.7",
   "description": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads"
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
   "homepage": "https://github.com/cyanheads/cpsc-recalls-mcp-server#readme",
   "repository": "https://github.com/cyanheads/cpsc-recalls-mcp-server",
   "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "cpsc",
+    "recalls",
+    "consumer-product-safety",
+    "product-safety"
+  ],
   "mcpServers": {
     "cpsc-recalls-mcp-server": {
       "command": "npx",
