@@ -249,6 +249,7 @@ src/
   mcp-server/
     tools/
       response-budget.ts                # 64,000-byte page budget shared by the two list tools
+      markdown-escape.ts                # Markdown escaping for CPSC text in content[]
       definitions/
         cpsc-search-recalls.tool.ts     # Search recalls by product, org, date
         cpsc-get-recall.tool.ts         # Full detail for a single recall by number
@@ -256,6 +257,7 @@ src/
   services/
     cpsc-recall/
       cpsc-recall-service.ts            # CPSC API client, init/accessor pattern
+      normalize-text.ts                 # CPSC HTML markup and character codes to plain text
       types.ts                          # Raw API and domain types
 ```
 
