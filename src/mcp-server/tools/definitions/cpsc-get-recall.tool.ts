@@ -9,14 +9,11 @@ import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service
 
 /** Static jurisdiction note included in every response. */
 const JURISDICTION =
-  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. ' +
-  'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).';
+  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).';
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
-  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. ' +
-  'CPSC records occasionally carry missing or inconsistent text. ' +
-  'Check cpsc_url before acting on a recall for a consumer-facing decision.';
+  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. CPSC records occasionally carry missing or inconsistent text. Check cpsc_url before acting on a recall for a consumer-facing decision.';
 
 /** Rendered in place of an upstream narrative field CPSC left null or empty. */
 const ABSENT_TEXT = '_Not provided by CPSC._';
@@ -42,21 +39,18 @@ function asSourceText(text: string): string {
 export const cpscGetRecall = tool('cpsc_get_recall', {
   title: 'Get CPSC Recall Detail',
   description:
-    'Full detail for a single CPSC recall by recall number. ' +
-    'Returns the complete record: hazard description, remedy instructions, all product variants, ' +
-    'incident/injury reports, images, and the official CPSC recall page URL. ' +
-    'Use after cpsc_search_recalls or cpsc_get_recent to get the full picture on a specific recall. ' +
-    'CPSC jurisdiction: consumer products only — food, vehicles, drugs, and pesticides are covered by other agencies.',
+    'Fetch the full record for one CPSC recall by recall number: hazard description, remedy instructions, every product variant, UPCs, incident and injury reports, images, and the official CPSC recall page URL. Get a recall number from cpsc_search_recalls or cpsc_get_recent. CPSC jurisdiction: consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are covered by other agencies.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
     recall_number: z
       .string()
-      .regex(/^\d{5}([a-d])?$/)
+      .regex(
+        /^\d{5}([a-d])?$/,
+        'A CPSC recall number is 5 digits, e.g. "25043", or 5 digits plus a letter a–d for 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent.',
+      )
       .describe(
-        'CPSC recall number. Modern records (2002–present) are 5-digit numeric, e.g. "25043". ' +
-          'Historical records from 1998–2001 may have a letter suffix a–d, e.g. "99003a". ' +
-          'Obtain from cpsc_search_recalls results.',
+        'CPSC recall number: 5 digits for 2002–present records, e.g. "25043", or 5 digits plus a letter a–d for 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent results.',
       ),
   }),
 
@@ -69,9 +63,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       .string()
       .nullable()
       .describe(
-        'Full recall description including product identification details. ' +
-          'Model numbers are typically embedded here, not in a structured field. ' +
-          'Null when CPSC published the record without a description — rare, but a genuine record can still be complete otherwise.',
+        'Full recall description including product identification details. Model numbers are typically embedded here, not in a structured field. Null when CPSC published the record without a description — rare, but a genuine record can still be complete otherwise.',
       ),
     cpsc_url: z
       .string()
@@ -92,9 +84,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     remedy_options: z
       .array(z.string().describe('Remedy type.'))
       .describe(
-        'Remedy types available: Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, Inspect. ' +
-          'Often empty — CPSC classified the remedy on fewer than half its records. Read remedy_instructions when this is empty, ' +
-          'and fall back to cpsc_url when that is empty too, rather than reporting that no remedy exists.',
+        'Remedy types available: Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, Inspect. Often empty — CPSC classified the remedy on fewer than half its records. Read remedy_instructions when this is empty, and fall back to cpsc_url when that is empty too, rather than reporting that no remedy exists.',
       ),
     remedy_instructions: z
       .string()
@@ -112,16 +102,13 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
           .describe('A product covered by this recall.'),
       )
       .describe(
-        'Products covered. A recall may include multiple products. ' +
-          'Note: model numbers are often in the description text, not a structured field.',
+        'Products covered. A recall may include multiple products. Model numbers are often in the description text, not a structured field.',
       ),
 
     upcs: z
       .array(z.string().describe('UPC code.'))
       .describe(
-        'UPC codes for this recall (sparse — ~4% of records have UPCs). ' +
-          'UPCs are stored at the recall level in the API, not per-product; ' +
-          'when the recall covers multiple products, UPC-to-product attribution is ambiguous.',
+        'UPC codes for this recall (sparse — ~4% of records have UPCs). CPSC lists UPCs for the recall as a whole, not per product, so on a recall covering several products a UPC cannot be tied to one of them.',
       ),
 
     injuries: z
@@ -158,17 +145,15 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       .describe('URLs of coordinated recalls by other agencies (e.g., Canada Health).'),
 
     data_quality_notes: z
-      .array(z.string().describe('One gap found in the upstream record.'))
+      .array(z.string().describe('One gap found in the CPSC record.'))
       .describe(
-        'Gaps this server observed in the upstream CPSC record — absent description, absent hazard text, absent product entries. ' +
-          'Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
+        'Gaps this server observed in the CPSC record — absent description, absent hazard text, absent product entries. Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
       ),
 
     cpsc_jurisdiction: z
       .string()
       .describe(
-        'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. ' +
-          'Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
+        'Which products CPSC covers and which agencies cover the rest — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
       ),
     source_note: z
       .string()
@@ -188,16 +173,16 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The saferproducts.gov API returned a transient error or timed out',
-      recovery: 'The CPSC API is occasionally unavailable. Retry in a few seconds.',
+      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, or sent an unreadable response',
+      recovery: 'The CPSC recall service is occasionally unavailable. Retry in a few seconds.',
       retryable: true,
     },
     {
       reason: 'upstream_rejected',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The saferproducts.gov API answered with an error row instead of a recall record, which the same request will always produce',
+      when: 'CPSC rejected the lookup instead of returning a recall, and it rejects the same request every time',
       recovery:
-        'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then confirm the recall number with cpsc_search_recalls.',
+        'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then confirm the recall number with cpsc_search_recalls or cpsc_get_recent.',
       retryable: false,
     },
   ],

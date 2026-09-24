@@ -5,7 +5,7 @@
 
 import type { HandlerContext, ReasonOf } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
 
@@ -168,6 +168,27 @@ describe('cpsc_get_recent', () => {
     expect(text).toContain('CPSC covers');
   });
 
+  it('format renders the header, each record block, then the source footer, in order', () => {
+    const result = makeFormatResult();
+    expect(formatText(result)).toBe(
+      [
+        '# Recent CPSC Recalls — 2025-03-01 to 2025-03-31 (30 days)',
+        '',
+        'Found 1 recall.',
+        '',
+        '---',
+        '**2025-03-15** — [25043] ACME Widget Recall',
+        'CPSC source fields:',
+        'Hazard: Fire hazard  |  Remedy: Refund',
+        'Products: ACME Widget',
+        '[CPSC page](https://www.cpsc.gov/Recalls/2025/acme-widget)',
+        '---',
+        `Source: ${result.source_note}`,
+        'CPSC jurisdiction: CPSC covers consumer products.',
+      ].join('\n'),
+    );
+  });
+
   describe('data quality notes and source caveat', () => {
     it('populates notes for a record with no hazards and no products', async () => {
       mockGetRecent.mockResolvedValueOnce([makeRaw({ Hazards: [], Products: [] })]);
@@ -261,21 +282,47 @@ describe('cpsc_get_recent', () => {
       expect(last.has_more).toBe(false);
     });
 
-    it('keeps truncated limit-only and offset-independent', async () => {
-      mockGetRecent.mockResolvedValueOnce(tenRaws());
-      const paged = await cpscGetRecent.handler(
-        cpscGetRecent.input.parse({ limit: 5, offset: 5 }),
-        ctx,
-      );
-      expect(paged.has_more).toBe(false);
-      expect(paged.truncated).toBe(true);
+    it('reports truncated exactly when has_more, on every page shape', async () => {
+      const cases = [
+        { limit: 5, offset: 0, has_more: true },
+        { limit: 5, offset: 5, has_more: false },
+        { limit: 5, offset: 8, has_more: false },
+        { limit: 20, offset: 0, has_more: false },
+        { limit: 5, offset: 10, has_more: false },
+        { limit: 2, offset: 999, has_more: false },
+      ];
+      for (const { limit, offset, has_more } of cases) {
+        mockGetRecent.mockResolvedValueOnce(tenRaws());
+        const result = await cpscGetRecent.handler(
+          cpscGetRecent.input.parse({ limit, offset }),
+          createMockContext({ errors: cpscGetRecent.errors }),
+        );
+        expect({ limit, offset, has_more: result.has_more }).toEqual({ limit, offset, has_more });
+        expect(result.truncated).toBe(result.has_more);
+      }
+    });
 
+    it('explains an exhausted page on both surfaces with a notice naming total_found', async () => {
       mockGetRecent.mockResolvedValueOnce(tenRaws());
-      const wide = await cpscGetRecent.handler(
-        cpscGetRecent.input.parse({ limit: 20, offset: 5 }),
-        ctx,
-      );
-      expect(wide.truncated).toBe(false);
+      const result = await runToolContract(cpscGetRecent, { limit: 2, offset: 999 });
+
+      expect(result.structuredContent).toMatchObject({
+        recalls: [],
+        total_found: 10,
+        truncated: false,
+        has_more: false,
+        notice: expect.stringContaining('10 recalls in this window'),
+      });
+      expect(wireText(result)).toContain('> Offset 999');
+    });
+
+    it('adds no notice to a non-empty page that fits', async () => {
+      for (const offset of [0, 5]) {
+        mockGetRecent.mockResolvedValueOnce(tenRaws());
+        const pageCtx = createMockContext({ errors: cpscGetRecent.errors });
+        await cpscGetRecent.handler(cpscGetRecent.input.parse({ limit: 5, offset }), pageCtx);
+        expect(getEnrichment(pageCtx).notice).toBeUndefined();
+      }
     });
 
     it('defaults offset to 0 and rejects a negative offset', async () => {
@@ -294,12 +341,35 @@ describe('cpsc_get_recent', () => {
           has_more: true,
         }),
       );
-      expect(paged).toContain('Found 40 recalls, showing 1 from offset 20 (truncated by limit).');
+      expect(paged).toContain('Found 40 recalls, showing 1 from offset 20 (truncated).');
       expect(paged).toContain('More available — repeat with offset 21.');
+
+      const last = formatText(
+        makeFormatResult(undefined, {
+          total_found: 40,
+          truncated: false,
+          offset: 39,
+          has_more: false,
+        }),
+      );
+      expect(last).toContain('Found 40 recalls, showing 1 from offset 39.');
+      expect(last).not.toContain('truncated');
+      expect(last).not.toContain('More available');
 
       const single = formatText(makeFormatResult());
       expect(single).toContain('Found 1 recall.');
       expect(single).not.toContain('More available');
+    });
+
+    it('format names a one-day window in the singular', () => {
+      const oneDay = formatText(
+        makeFormatResult(undefined, {
+          period: { start: '2026-09-23', end: '2026-09-24', days: 1 },
+        }),
+      );
+      expect(oneDay).toContain('# Recent CPSC Recalls — 2026-09-23 to 2026-09-24 (1 day)');
+
+      expect(formatText(makeFormatResult())).toContain('(30 days)');
     });
   });
 
@@ -308,13 +378,13 @@ describe('cpsc_get_recent', () => {
       mockGetRecent.mockRejectedValueOnce(
         new McpError(
           JsonRpcErrorCode.ServiceUnavailable,
-          'CPSC API returned an error row instead of recall records: Invalid date format.',
+          'CPSC rejected the request: Invalid date format.',
           { retryable: false },
         ),
       );
       await expect(cpscGetRecent.handler(cpscGetRecent.input.parse({}), ctx)).rejects.toMatchObject(
         {
-          message: 'CPSC API returned an error row instead of recall records: Invalid date format.',
+          message: 'CPSC rejected the request: Invalid date format.',
           data: { reason: 'upstream_rejected', retryable: false },
         },
       );
@@ -330,6 +400,82 @@ describe('cpsc_get_recent', () => {
       );
     });
   });
+  describe('response size budget', () => {
+    const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
+    /** Records whose hazard text alone is `size` characters, sized to cross the budget in bulk. */
+    const heavyRaws = (count: number, size = 2_000) =>
+      Array.from({ length: count }, (_, i) =>
+        makeRaw({
+          RecallNumber: String(40000 + i),
+          Hazards: [{ Name: `Fire hazard ${'x'.repeat(size)}`, HazardType: '', HazardTypeID: '' }],
+        }),
+      );
+    type Page = {
+      recalls: Array<{ recall_number: string }>;
+      has_more: boolean;
+      truncated: boolean;
+      notice?: string;
+    };
+
+    it('cuts a page at the 64,000-byte budget on both surfaces and names the next offset', async () => {
+      mockGetRecent.mockResolvedValueOnce(heavyRaws(60));
+      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100 });
+      const sc = result.structuredContent as Page;
+      const returned = sc.recalls.length;
+
+      expect(returned).toBeGreaterThan(0);
+      expect(returned).toBeLessThan(60);
+      expect(sc.has_more).toBe(true);
+      expect(sc.truncated).toBe(true);
+      expect(utf8(JSON.stringify(sc))).toBeLessThanOrEqual(64_000);
+      expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
+      expect(utf8(JSON.stringify(sc))).toBeGreaterThan(64_000 - 3_000);
+      expect(sc.notice).toContain(`Returned ${returned} of the 100 requested recalls`);
+      expect(sc.notice).toContain(`offset ${returned}`);
+      expect(wireText(result)).toContain(`> ${sc.notice}`);
+    });
+
+    it('continues from the emitted offset with no gap or overlap', async () => {
+      const all = heavyRaws(60);
+      const seen: string[] = [];
+      let offset = 0;
+      for (let page = 0; page < 10; page++) {
+        mockGetRecent.mockResolvedValueOnce(all);
+        const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100, offset });
+        const sc = result.structuredContent as Page;
+        expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
+        expect(sc.truncated).toBe(sc.has_more);
+        seen.push(...sc.recalls.map((r) => r.recall_number));
+        if (!sc.has_more) break;
+        offset += sc.recalls.length;
+      }
+
+      expect(seen).toEqual(all.map((r) => r.RecallNumber));
+    });
+
+    it('returns a record larger than the budget alone, never an empty page or an error', async () => {
+      mockGetRecent.mockResolvedValueOnce(heavyRaws(2, 70_000));
+      const result = await runToolContract(cpscGetRecent, { days: 30 });
+      const sc = result.structuredContent as Page;
+
+      expect(result.isError).toBeFalsy();
+      expect(sc.recalls).toHaveLength(1);
+      expect(sc.has_more).toBe(true);
+      expect(sc.notice).toContain('offset 1');
+    });
+
+    it('leaves a default-limit page of typical records whole, with no notice', async () => {
+      mockGetRecent.mockResolvedValueOnce(
+        Array.from({ length: 30 }, (_, i) => makeRaw({ RecallNumber: String(41000 + i) })),
+      );
+      const result = await runToolContract(cpscGetRecent, { days: 30 });
+      const sc = result.structuredContent as Page;
+
+      expect(sc.recalls).toHaveLength(20);
+      expect(sc.notice).toBeUndefined();
+    });
+  });
+
   /**
    * The wire envelope both client families read: `structuredContent` and the
    * `content[]` text channel must carry the same facts on success, and the same
@@ -361,19 +507,43 @@ describe('cpsc_get_recent', () => {
       const result = await runToolContract(cpscGetRecent, { days: 7 });
 
       expect(result.isError).toBeFalsy();
-      expect(result.structuredContent).toMatchObject({
+      const sc = result.structuredContent as {
+        period: { start: string; end: string };
+        notice?: string;
+      };
+      expect(sc).toMatchObject({
         total_found: 0,
+        truncated: false,
         has_more: false,
         recalls: [],
       });
-      expect(wireText(result)).toContain('Found 0 recalls');
+      expect(sc.notice).toContain(`between ${sc.period.start} and ${sc.period.end}`);
+      expect(sc.notice).toContain('days');
+      const text = wireText(result);
+      expect(text).toContain('Found 0 recalls');
+      expect(text).toContain(`> ${sc.notice}`);
+    });
+
+    it('points an empty 365-day window at cpsc_search_recalls instead of a larger days', async () => {
+      mockGetRecent.mockResolvedValueOnce([]);
+      const result = await runToolContract(cpscGetRecent, { days: 365 });
+
+      const notice = (result.structuredContent as { notice?: string }).notice;
+      expect(notice).toContain('cpsc_search_recalls');
+    });
+
+    it('carries no notice on a non-empty window', async () => {
+      mockGetRecent.mockResolvedValueOnce([makeRaw()]);
+      const result = await runToolContract(cpscGetRecent, { days: 7 });
+
+      expect(result.structuredContent).not.toHaveProperty('notice');
     });
 
     it('reports upstream_rejected with its recovery hint on both surfaces', async () => {
       mockGetRecent.mockRejectedValueOnce(
         new McpError(
           JsonRpcErrorCode.ServiceUnavailable,
-          'CPSC API returned an error row instead of recall records: Invalid date format.',
+          'CPSC rejected the request: Invalid date format.',
           { retryable: false },
         ),
       );

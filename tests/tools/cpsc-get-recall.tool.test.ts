@@ -149,13 +149,13 @@ describe('cpsc_get_recall', () => {
     mockGetByNumber.mockRejectedValueOnce(
       new McpError(
         JsonRpcErrorCode.ServiceUnavailable,
-        'CPSC API returned an error row instead of recall records: Invalid recall number.',
+        'CPSC rejected the request: Invalid recall number.',
         { retryable: false },
       ),
     );
     const input = cpscGetRecall.input.parse({ recall_number: '25043' });
     await expect(cpscGetRecall.handler(input, ctx)).rejects.toMatchObject({
-      message: 'CPSC API returned an error row instead of recall records: Invalid recall number.',
+      message: 'CPSC rejected the request: Invalid recall number.',
       data: { reason: 'upstream_rejected', retryable: false },
     });
   });

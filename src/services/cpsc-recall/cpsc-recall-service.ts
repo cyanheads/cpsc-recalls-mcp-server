@@ -64,7 +64,7 @@ export class CpscRecallService {
 
   /**
    * Fetch recalls within a date window. The date range is required — passing no
-   * dates returns all 9,828+ records, which is too large to be useful.
+   * dates returns the whole dataset (over 10,000 records), which is too large to be useful.
    */
   getRecent(dateStart: string, dateEnd: string, ctx: Context): Promise<RawRecall[]> {
     const url = this.buildUrl({ RecallDateStart: dateStart, RecallDateEnd: dateEnd });
@@ -105,10 +105,9 @@ export class CpscRecallService {
         if (errorRow !== undefined) {
           const upstreamMessage = (errorRow as Partial<RawRecall>)?.Title;
           throw serviceUnavailable(
-            'CPSC API returned an error row instead of recall records' +
-              (typeof upstreamMessage === 'string' && upstreamMessage.length > 0
-                ? `: ${upstreamMessage.slice(0, ERROR_ROW_MESSAGE_LIMIT)}`
-                : '.'),
+            typeof upstreamMessage === 'string' && upstreamMessage.length > 0
+              ? `CPSC rejected the request: ${upstreamMessage.slice(0, ERROR_ROW_MESSAGE_LIMIT)}`
+              : 'CPSC rejected the request without saying why.',
             // Deterministic — the same request produces the same error row, so skip retries.
             { retryable: false },
           );

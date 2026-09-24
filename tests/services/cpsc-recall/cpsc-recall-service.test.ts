@@ -3,9 +3,13 @@
  * @module tests/services/cpsc-recall/cpsc-recall-service.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
+import { cpscSearchRecalls } from '@/mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
+import {
+  CpscRecallService,
+  initCpscRecallService,
+} from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** A genuine recall record, trimmed to the fields the service inspects. */
 const genuineRecord = {
@@ -63,6 +67,7 @@ describe('CpscRecallService', () => {
     ctx = createMockContext();
     service = new CpscRecallService();
     mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('unmocked fetch'));
     vi.stubGlobal('fetch', mockFetch);
   });
 
@@ -76,7 +81,9 @@ describe('CpscRecallService', () => {
     const err = await service.search({ RecallDateStart: '2026-99-99' }, ctx).catch((e) => e);
 
     expect(err).toBeInstanceOf(Error);
-    expect(err.message).toContain('error row');
+    expect(err.message).toBe(
+      'CPSC rejected the request: Error retrieving Recalls: String was not recognized as a valid DateTime.',
+    );
     // Deterministic failure — the same request always produces the same row, so no retries.
     expect(err.data).toMatchObject({ retryable: false });
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -140,7 +147,17 @@ describe('CpscRecallService', () => {
   it('rejects the error row on the getRecent path too', async () => {
     mockFetch.mockResolvedValue(jsonResponse([cpscErrorRow]));
 
-    await expect(service.getRecent('2026-01-01', '2026-02-01', ctx)).rejects.toThrow(/error row/);
+    await expect(service.getRecent('2026-01-01', '2026-02-01', ctx)).rejects.toThrow(
+      /^CPSC rejected the request: Error retrieving Recalls/,
+    );
+  });
+
+  it('says CPSC rejected the request without a reason when the row carries no message', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([{ ...cpscErrorRow, Title: null }]));
+
+    await expect(service.search({ RecallDateStart: '2026-99-99' }, ctx)).rejects.toThrow(
+      'CPSC rejected the request without saying why.',
+    );
   });
 
   /**
@@ -176,6 +193,95 @@ describe('CpscRecallService', () => {
         expect(mockFetch).toHaveBeenCalledTimes(4);
       });
     }
+  });
+
+  /**
+   * cpsc_search_recalls against the real service, fetch stubbed: the URL the upstream
+   * actually receives, not the params object a service mock would record.
+   */
+  describe('upstream URL for cpsc_search_recalls', () => {
+    const gracoCrib = {
+      ...genuineRecord,
+      Title: 'Graco Crib Recall',
+      Hazards: [{ Name: 'Fire hazard', HazardType: '', HazardTypeID: '' }],
+    };
+    const upstreamQuery = async (args: Record<string, unknown>) => {
+      mockFetch.mockResolvedValueOnce(jsonResponse([gracoCrib]));
+      initCpscRecallService();
+      const result = await runToolContract(cpscSearchRecalls, args as never);
+      expect(result.isError).toBeFalsy();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      return Object.fromEntries(new URL(String(mockFetch.mock.calls[0]?.[0])).searchParams);
+    };
+
+    it('sends the 1970-01-01 date floor when hazard_search is the only filter', async () => {
+      expect(await upstreamQuery({ hazard_search: 'fire' })).toEqual({
+        format: 'json',
+        RecallDateStart: '1970-01-01',
+      });
+    });
+
+    it('sends one word per text filter and no floor when a filter maps upstream', async () => {
+      expect(await upstreamQuery({ title_search: 'Graco crib', hazard_search: 'fire' })).toEqual({
+        format: 'json',
+        RecallTitle: 'Graco',
+      });
+    });
+
+    /**
+     * CPSC refuses a query string longer than 2,048 bytes (HTTP 404 at 2,049). Eight text
+     * filters at their 500-character maximum, in a script that URL-encodes to nine bytes a
+     * character, plus every date bound, must still fit.
+     */
+    it('keeps the query string within 2,048 bytes when every filter is at its maximum', async () => {
+      const long = '中'.repeat(500);
+      const query = await upstreamQuery({
+        product_name: long,
+        manufacturer: long,
+        retailer: long,
+        importer: long,
+        distributor: long,
+        title_search: long,
+        description_search: long,
+        remedy: long,
+        date_start: '2000-01-01',
+        date_end: '2026-12-31',
+        updated_start: '2000-01-01',
+        updated_end: '2026-12-31',
+      });
+      const search = new URL(String(mockFetch.mock.calls[0]?.[0])).search.slice(1);
+
+      expect(search.length).toBeLessThanOrEqual(2_048);
+      expect(query.RecallTitle).toBe('中'.repeat(22));
+    });
+
+    it('forwards a prefix of a long word that never splits a surrogate pair', async () => {
+      const query = await upstreamQuery({ title_search: '😀'.repeat(250) });
+
+      expect(query.RecallTitle).toBe('😀'.repeat(16));
+    });
+
+    it('relays a CPSC rejection as upstream_rejected on both surfaces, in behavioral terms', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse([cpscErrorRow]));
+      initCpscRecallService();
+      const result = await runToolContract(cpscSearchRecalls, { title_search: 'crib' });
+      const text = (result.content ?? [])
+        .map((block) => ('text' in block ? block.text : ''))
+        .join('');
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          message:
+            'CPSC rejected the request: Error retrieving Recalls: String was not recognized as a valid DateTime.',
+          data: { reason: 'upstream_rejected', retryable: false },
+        },
+      });
+      expect(text).toContain('CPSC rejected the request: Error retrieving Recalls');
+      expect(text).toContain('Do not retry this request unchanged');
+      expect(text).not.toContain('error row');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('retry boundary', () => {
