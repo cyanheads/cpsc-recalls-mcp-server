@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { linkDestination, escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
   budgetCutNotice,
   countWithinBudget,
@@ -20,7 +21,7 @@ const JURISDICTION =
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
-  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. CPSC records occasionally carry missing or inconsistent text. Check cpsc_url before acting on a recall for a consumer-facing decision.';
+  'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text; this server does not otherwise edit or verify them. CPSC records occasionally carry missing or inconsistent text. Check cpsc_url before acting on a recall for a consumer-facing decision.';
 
 /** The longest window `days` accepts. */
 const MAX_DAYS = 365;
@@ -82,19 +83,21 @@ function toRecentRecall(r: RawRecall): RecentRecall {
 
 /**
  * One recall's `content[]` block. `format()` and the response budget both call it, so the
- * bytes charged for a record are the bytes rendered for it.
+ * bytes charged for a record are the bytes rendered for it — Markdown escaping included,
+ * which is why the escaping happens here rather than in `format()`.
  */
 function renderRecallBlock(r: RecentRecall): string {
-  const hazardText = r.hazards.length > 0 ? r.hazards.join('; ') : 'Not specified';
-  const remedyText = r.remedy_options.length > 0 ? r.remedy_options.join(', ') : 'Not specified';
-  const productText = r.products.length > 0 ? r.products.join(', ') : 'Not specified';
+  const hazardText = r.hazards.length > 0 ? md(r.hazards.join('; ')) : 'Not specified';
+  const remedyText =
+    r.remedy_options.length > 0 ? md(r.remedy_options.join(', ')) : 'Not specified';
+  const productText = r.products.length > 0 ? md(r.products.join(', ')) : 'Not specified';
 
   const lines = [
-    `**${r.recall_date}** — [${r.recall_number}] ${r.title}`,
+    `**${r.recall_date}** — [${r.recall_number}] ${md(r.title)}`,
     'CPSC source fields:',
     `Hazard: ${hazardText}  |  Remedy: ${remedyText}`,
     `Products: ${productText}`,
-    `[CPSC page](${r.cpsc_url})`,
+    `[CPSC page](${linkDestination(r.cpsc_url)})`,
   ];
   if (r.data_quality_notes.length > 0) {
     lines.push(`**Data quality (server-assessed):** ${r.data_quality_notes.join(' ')}`);
@@ -204,7 +207,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     source_note: z
       .string()
       .describe(
-        'Provenance caveat: recall fields are relayed from CPSC unedited and unverified; check cpsc_url before a consumer-facing decision.',
+        'Provenance caveat: recall fields are CPSC record text with HTML markup and character codes converted to plain text, not otherwise edited or verified; check cpsc_url before a consumer-facing decision.',
       ),
   }),
 
@@ -221,7 +224,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, or sent an unreadable response',
+      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, reported a temporary failure reading its recall data, or sent an unreadable response',
       recovery: 'The CPSC recall service is occasionally unavailable. Retry in a few seconds.',
       retryable: true,
     },

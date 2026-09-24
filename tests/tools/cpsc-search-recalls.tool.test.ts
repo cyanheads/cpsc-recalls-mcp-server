@@ -75,7 +75,7 @@ const makeFormatResult = (
   has_more: false,
   cpsc_jurisdiction: 'CPSC covers consumer products.',
   source_note:
-    'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+    'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text; this server does not otherwise edit or verify them. Check cpsc_url before acting on a recall for a consumer-facing decision.',
   ...resultOverrides,
 });
 
@@ -398,16 +398,136 @@ describe('cpsc_search_recalls', () => {
       expect(withNotes).toContain('**Data quality (server-assessed):**');
       expect(withNotes).toContain('CPSC listed no hazard description.');
       expect(withoutNotes).not.toContain('Data quality');
-      expect(withoutNotes).toContain('relayed verbatim from the CPSC record');
+      expect(withoutNotes).toContain('converted to plain text');
       expect(withoutNotes).toContain('cpsc_url');
     });
 
-    it('carries the source caveat on the handler result', async () => {
+    it('carries the source caveat on the handler result, without claiming the text is verbatim', async () => {
       mockSearch.mockResolvedValueOnce([makeRaw()]);
       const input = cpscSearchRecalls.input.parse({ title_search: 'widget' });
       const result = await cpscSearchRecalls.handler(input, ctx);
 
-      expect(result.source_note).toContain('relayed verbatim from the CPSC record');
+      expect(result.source_note).toContain(
+        'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text',
+      );
+      expect(result.source_note).not.toMatch(/verbatim|unedited/);
+    });
+  });
+
+  /**
+   * CPSC text reaches content[] Markdown-escaped, so a renderer shows every character;
+   * structuredContent carries it unescaped.
+   */
+  describe('Markdown escaping in content[]', () => {
+    const marked = {
+      title: 'Talon [1000] Recall',
+      hazards: ['Serial 1HFVE05**K4000003 1HFVE05**K4003902'],
+      retailers: ['Sold at: Ross\n- Simply 6'],
+      images: [
+        { url: 'https://www.cpsc.gov/s3fs-public/a_b*.png', caption: 'EMABF*WS* & LMABF*WS*' },
+      ],
+      remedy_summary: 'Lids labeled \\"CABINET.\\" — call now',
+      cpsc_url: 'https://www.cpsc.gov/Recalls/2024/Amer Sports Winter & Outdoor',
+    };
+
+    it('escapes interpolated text, keeps image addresses bare, and encodes spaces in the link', () => {
+      const text = formatText(makeFormatResult(marked));
+
+      expect(text).toContain('## [25043] — Talon \\[1000\\] Recall (2025-03-15)');
+      expect(text).toContain('**Hazard:** Serial 1HFVE05\\*\\*K4000003 1HFVE05\\*\\*K4003902');
+      expect(text).toContain('**Sold by:** Sold at: Ross\n\\- Simply 6');
+      expect(text).toContain(
+        '**Images (1):** EMABF\\*WS\\* & LMABF\\*WS\\*: https://www.cpsc.gov/s3fs-public/a_b*.png',
+      );
+      expect(text).toContain('**Remedy:** Refund — Lids labeled \\\\"CABINET.\\\\" — call now');
+      expect(text).toContain(
+        '[View recall](https://www.cpsc.gov/Recalls/2024/Amer%20Sports%20Winter%20&%20Outdoor)',
+      );
+    });
+
+    it('carries the text and address unescaped on structuredContent', async () => {
+      mockSearch.mockResolvedValueOnce([
+        makeRaw({
+          Title: marked.title,
+          URL: marked.cpsc_url,
+          Hazards: [{ Name: marked.hazards[0], HazardType: '', HazardTypeID: '' }],
+        }),
+      ]);
+      const result = await runToolContract(cpscSearchRecalls, { title_search: 'talon' });
+
+      expect(result.structuredContent).toMatchObject({
+        recalls: [{ title: marked.title, hazards: marked.hazards, cpsc_url: marked.cpsc_url }],
+      });
+      expect(wireText(result)).toContain('1HFVE05\\*\\*K4000003');
+    });
+
+    /** Each record's hazard is 2,000 asterisks: 2,000 bytes of JSON, 4,000 once escaped. */
+    it('charges the budget for the escaped bytes it emits', async () => {
+      const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
+      mockSearch.mockResolvedValueOnce(
+        Array.from({ length: 60 }, (_, i) =>
+          makeRaw({
+            RecallNumber: String(40000 + i),
+            Hazards: [{ Name: '*'.repeat(2_000), HazardType: '', HazardTypeID: '' }],
+          }),
+        ),
+      );
+      const result = await runToolContract(cpscSearchRecalls, {
+        product_name: 'widget',
+        limit: 200,
+      });
+      const text = wireText(result);
+
+      expect(text).toContain(`**Hazard:** ${'\\*'.repeat(2_000)}`);
+      expect(utf8(text)).toBeLessThanOrEqual(64_000);
+      expect(utf8(text)).toBeGreaterThan(64_000 - 5_000);
+      expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
+    });
+
+    it('renders an image address without spaces exactly as before', async () => {
+      mockSearch.mockResolvedValueOnce([makeRaw()]);
+      const result = await runToolContract(cpscSearchRecalls, { title_search: 'widget' });
+
+      expect(wireText(result)).toContain(
+        '**Images (1):** Product photo: https://example.com/img.jpg\n',
+      );
+    });
+
+    /** Record 24136's image addresses hold spaces; a GFM autolink would end at the first one. */
+    it('encodes spaces in an image address and leaves structuredContent unchanged', async () => {
+      const url = 'https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png';
+      mockSearch.mockResolvedValueOnce([
+        makeRaw({ Images: [{ URL: url, Caption: 'Recalled Cannondale 26" Dave bicycle' }] }),
+      ]);
+      const result = await runToolContract(cpscSearchRecalls, { title_search: 'widget' });
+
+      expect(result.structuredContent).toMatchObject({ recalls: [{ images: [{ url }] }] });
+      expect(wireText(result)).toContain(
+        '**Images (1):** Recalled Cannondale 26" Dave bicycle: https://www.cpsc.gov/s3fs-public/Recalled%20Cannondale%2026”%20Dave%20bicycle.png\n',
+      );
+    });
+
+    /** Each record's image address holds 2,000 spaces: 2,000 bytes of JSON, 6,000 once encoded. */
+    it('charges the budget for the encoded image address bytes it emits', async () => {
+      const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
+      mockSearch.mockResolvedValueOnce(
+        Array.from({ length: 60 }, (_, i) =>
+          makeRaw({
+            RecallNumber: String(40000 + i),
+            Images: [{ URL: `https://x.gov/${' '.repeat(2_000)}.png`, Caption: 'Photo' }],
+          }),
+        ),
+      );
+      const result = await runToolContract(cpscSearchRecalls, {
+        product_name: 'widget',
+        limit: 200,
+      });
+      const text = wireText(result);
+
+      expect(text).toContain(`Photo: https://x.gov/${'%20'.repeat(2_000)}.png`);
+      expect(utf8(text)).toBeLessThanOrEqual(64_000);
+      expect(utf8(text)).toBeGreaterThan(64_000 - 7_000);
+      expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
     });
   });
 

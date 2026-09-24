@@ -69,7 +69,7 @@ const makeFormatResult = (
   has_more: false,
   cpsc_jurisdiction: 'CPSC covers consumer products.',
   source_note:
-    'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+    'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text; this server does not otherwise edit or verify them. Check cpsc_url before acting on a recall for a consumer-facing decision.',
   ...resultOverrides,
 });
 
@@ -215,7 +215,10 @@ describe('cpsc_get_recent', () => {
       const input = cpscGetRecent.input.parse({});
       const result = await cpscGetRecent.handler(input, ctx);
 
-      expect(result.source_note).toContain('relayed verbatim from the CPSC record');
+      expect(result.source_note).toContain(
+        'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text',
+      );
+      expect(result.source_note).not.toMatch(/verbatim|unedited/);
     });
 
     it('renders notes only when present, and always renders the source caveat', () => {
@@ -227,7 +230,7 @@ describe('cpsc_get_recent', () => {
       expect(withNotes).toContain('**Data quality (server-assessed):**');
       expect(withNotes).toContain('CPSC listed no hazard description.');
       expect(withoutNotes).not.toContain('Data quality');
-      expect(withoutNotes).toContain('relayed verbatim from the CPSC record');
+      expect(withoutNotes).toContain('converted to plain text');
       expect(withoutNotes).toContain('cpsc_url');
     });
 
@@ -235,6 +238,43 @@ describe('cpsc_get_recent', () => {
       const text = formatText(makeFormatResult());
 
       expect(text).toContain('CPSC source fields:\nHazard: Fire hazard');
+    });
+  });
+
+  describe('Markdown escaping in content[]', () => {
+    it('escapes interpolated text and encodes spaces in the link, leaving structuredContent unchanged', async () => {
+      const url = 'https://www.cpsc.gov/Recalls/2024/Best-Buy-Recalls-Insignia-Air Fryers';
+      mockGetRecent.mockResolvedValueOnce([
+        makeRaw({
+          Title: 'ECP8*A [Air] Fryer Recall',
+          URL: url,
+          Hazards: [{ Name: '- Burn_ hazard', HazardType: '', HazardTypeID: '' }],
+          Products: [
+            {
+              Name: 'Fryer `Pro`',
+              Description: '',
+              Model: '',
+              Type: '',
+              CategoryID: '',
+              NumberOfUnits: '',
+            },
+          ],
+        }),
+      ]);
+      const result = await runToolContract(cpscGetRecent, { days: 7 });
+      const text = wireText(result);
+
+      expect(result.structuredContent).toMatchObject({
+        recalls: [
+          { title: 'ECP8*A [Air] Fryer Recall', hazards: ['- Burn_ hazard'], cpsc_url: url },
+        ],
+      });
+      expect(text).toContain('**2025-03-15** — [25043] ECP8\\*A \\[Air\\] Fryer Recall');
+      expect(text).toContain('Hazard: \\- Burn\\_ hazard  |  Remedy: Refund');
+      expect(text).toContain('Products: Fryer \\`Pro\\`');
+      expect(text).toContain(
+        '[CPSC page](https://www.cpsc.gov/Recalls/2024/Best-Buy-Recalls-Insignia-Air%20Fryers)',
+      );
     });
   });
 
@@ -451,6 +491,25 @@ describe('cpsc_get_recent', () => {
       }
 
       expect(seen).toEqual(all.map((r) => r.RecallNumber));
+    });
+
+    /** Each record's hazard is 2,000 asterisks: 2,000 bytes of JSON, 4,000 once escaped. */
+    it('charges the budget for the escaped bytes it emits', async () => {
+      mockGetRecent.mockResolvedValueOnce(
+        Array.from({ length: 60 }, (_, i) =>
+          makeRaw({
+            RecallNumber: String(40000 + i),
+            Hazards: [{ Name: '*'.repeat(2_000), HazardType: '', HazardTypeID: '' }],
+          }),
+        ),
+      );
+      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100 });
+      const text = wireText(result);
+
+      expect(text).toContain(`Hazard: ${'\\*'.repeat(2_000)}  |`);
+      expect(utf8(text)).toBeLessThanOrEqual(64_000);
+      expect(utf8(text)).toBeGreaterThan(64_000 - 5_000);
+      expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
     });
 
     it('returns a record larger than the budget alone, never an empty page or an error', async () => {

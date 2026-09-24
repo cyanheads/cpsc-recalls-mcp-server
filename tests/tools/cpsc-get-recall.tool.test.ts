@@ -71,7 +71,7 @@ const makeFormatResult = (overrides?: Record<string, unknown>) => ({
   data_quality_notes: [],
   cpsc_jurisdiction: 'CPSC covers consumer products.',
   source_note:
-    'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. Check cpsc_url before acting on a recall for a consumer-facing decision.',
+    'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text; this server does not otherwise edit or verify them. Check cpsc_url before acting on a recall for a consumer-facing decision.',
   ...overrides,
 });
 
@@ -302,7 +302,10 @@ describe('cpsc_get_recall', () => {
       const result = await cpscGetRecall.handler(input, ctx);
 
       expect(result.data_quality_notes).toEqual([]);
-      expect(result.source_note).toContain('relayed verbatim from the CPSC record');
+      expect(result.source_note).toContain(
+        'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text',
+      );
+      expect(result.source_note).not.toMatch(/verbatim|unedited/);
     });
 
     it('renders the notes section only when notes exist, and always the source caveat', () => {
@@ -314,14 +317,17 @@ describe('cpsc_get_recall', () => {
       expect(withNotes).toContain('## Data quality (server-assessed)');
       expect(withNotes).toContain('- CPSC listed no hazard description.');
       expect(withoutNotes).not.toContain('## Data quality');
-      expect(withoutNotes).toContain('relayed verbatim from the CPSC record');
+      expect(withoutNotes).toContain('converted to plain text');
       expect(withoutNotes).toContain('cpsc_url');
     });
 
     it('marks relayed narrative fields as CPSC source text', () => {
       const text = formatText(makeFormatResult());
 
-      expect(text).toContain('Quoted blocks below are CPSC source text, relayed unedited.');
+      expect(text).toContain(
+        'Quoted blocks below are CPSC source text, converted to plain text; a backslash before a Markdown character is an escape, not part of the text.',
+      );
+      expect(text).not.toContain('unedited');
       expect(text).toContain('**⚠️ Hazard (CPSC source text):**\n> Fire hazard');
       expect(text).toContain('## Incidents / Injuries (CPSC source text)\n> None reported');
       expect(text).toContain('**Contact (CPSC source text):**\n> Call 1-800-555-1234');
@@ -344,6 +350,117 @@ describe('cpsc_get_recall', () => {
       }
     });
   });
+  /**
+   * CPSC text reaches content[] Markdown-escaped, so a renderer shows every character;
+   * structuredContent carries it unescaped.
+   */
+  describe('Markdown escaping in content[]', () => {
+    it('escapes quoted blocks, headings, and list lines, and keeps line starts from opening blocks', () => {
+      const text = formatText(
+        makeFormatResult({
+          title: 'Talon Recall #',
+          description: 'Serial 1HFVE05**K4000003\nRoss\n- Simply 6\n1. Tee\n# Model\n> Quote',
+          remedy_instructions: 'Lids labeled \\"CABINET.\\"',
+          products: [{ name: 'Model_X *Pro*', units_recalled: 'About 5,000' }],
+          retailers: ['Stoopher & Boots <Main>'],
+          manufacturers: ['ACME [US]'],
+          images: [{ url: 'https://example.com/a_b*.png', caption: 'EMABF*WS* & LMABF*WS*' }],
+        }),
+      );
+
+      expect(text).toContain('# [25043] — Talon Recall \\#');
+      expect(text).toContain(
+        '## Description (CPSC source text)\n> Serial 1HFVE05\\*\\*K4000003\n> Ross\n> \\- Simply 6\n> 1\\. Tee\n> \\# Model\n> \\> Quote',
+      );
+      expect(text).toContain('> Lids labeled \\\\"CABINET.\\\\"');
+      expect(text).toContain('> - Model_X \\*Pro\\* — About 5,000');
+      expect(text).toContain('> - Stoopher & Boots \\<Main>');
+      expect(text).toContain('## Manufactured By\n- ACME \\[US\\]');
+      expect(text).toContain('- https://example.com/a_b*.png\n> EMABF\\*WS\\* & LMABF\\*WS\\*');
+    });
+
+    it('encodes spaces in the recall page link and leaves structuredContent unchanged', async () => {
+      const url = 'https://www.cpsc.gov/Recalls/2024/Torquay eTrading Recalls';
+      mockGetByNumber.mockResolvedValueOnce(makeRaw({ URL: url }));
+      const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });
+
+      expect(result.structuredContent).toMatchObject({ cpsc_url: url });
+      expect(wireText(result)).toContain(
+        '[View official CPSC recall page](https://www.cpsc.gov/Recalls/2024/Torquay%20eTrading%20Recalls)',
+      );
+    });
+
+    it('quotes every line of text that breaks lines with carriage returns', () => {
+      const text = formatText(makeFormatResult({ description: 'Line one\r- Line two\r\n# Three' }));
+
+      expect(text).toContain('> Line one\n> \\- Line two\n> \\# Three\n');
+    });
+
+    it('renders image and coordinated recall addresses without spaces exactly as before', async () => {
+      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      const text = wireText(await runToolContract(cpscGetRecall, { recall_number: '25043' }));
+
+      expect(text).toContain(
+        '## Images (1) — captions are CPSC source text\n- https://example.com/img.jpg\n> Product photo\n',
+      );
+      expect(text).toContain(
+        '## Coordinated Recalls\n- https://healthcanada.gc.ca/recalls/2025/123\n',
+      );
+    });
+
+    /** Record 24136's image addresses hold spaces; a GFM autolink would end at the first one. */
+    it('encodes spaces in image and coordinated recall addresses, and leaves structuredContent unchanged', async () => {
+      const image = 'https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png';
+      const coordinated = 'https://recalls-rappels.canada.ca/en/alert-recall/cannondale dave';
+      mockGetByNumber.mockResolvedValueOnce(
+        makeRaw({
+          Images: [{ URL: image, Caption: 'Recalled Cannondale 26" Dave bicycle' }],
+          Inconjunctions: [{ URL: coordinated }],
+        }),
+      );
+      const result = await runToolContract(cpscGetRecall, { recall_number: '24136' });
+      const text = wireText(result);
+
+      expect(result.structuredContent).toMatchObject({
+        images: [{ url: image }],
+        coordinated_recalls: [coordinated],
+      });
+      expect(text).toContain(
+        '- https://www.cpsc.gov/s3fs-public/Recalled%20Cannondale%2026”%20Dave%20bicycle.png\n> Recalled Cannondale 26" Dave bicycle',
+      );
+      expect(text).toContain(
+        '- https://recalls-rappels.canada.ca/en/alert-recall/cannondale%20dave\n',
+      );
+    });
+
+    /** Record 26799's image address ends in "."; GFM leaves trailing punctuation out of an autolink. */
+    it('encodes trailing punctuation in an image address so the autolink covers all of it', async () => {
+      const image = 'https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i.';
+      mockGetByNumber.mockResolvedValueOnce(
+        makeRaw({ Images: [{ URL: image, Caption: 'Label' }] }),
+      );
+      const result = await runToolContract(cpscGetRecall, { recall_number: '26799' });
+
+      expect(result.structuredContent).toMatchObject({ images: [{ url: image }] });
+      expect(wireText(result)).toContain(
+        '- https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i%2E\n> Label',
+      );
+    });
+
+    /** Record 26796 carries a sentence where its image address belongs. */
+    it('renders an image entry that is not a web address as escaped text, not an encoded address', () => {
+      const text = formatText(
+        makeFormatResult({
+          images: [
+            { url: 'The recalled mattresses violate the *mandatory* standard.', caption: '' },
+          ],
+        }),
+      );
+
+      expect(text).toContain('- The recalled mattresses violate the \\*mandatory\\* standard.\n');
+    });
+  });
+
   /**
    * The wire envelope both client families read: `structuredContent` and the
    * `content[]` text channel must carry the same facts on success, and the same

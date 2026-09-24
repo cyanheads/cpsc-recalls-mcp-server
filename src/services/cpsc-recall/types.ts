@@ -9,7 +9,8 @@
  * The identifying fields (`RecallNumber`, `RecallDate`, `Title`) are always present on a
  * genuine record. CPSC nulls them on the error row it substitutes for results when a
  * request is malformed upstream; `CpscRecallService` rejects that row before any record
- * reaches a handler, so consumers of this type can treat them as non-null.
+ * reaches a handler, so consumers of this type can treat them as non-null. The service also
+ * converts the HTML markup and character codes in every text field to plain text first.
  */
 export interface RawRecall {
   ConsumerContact: string | null;

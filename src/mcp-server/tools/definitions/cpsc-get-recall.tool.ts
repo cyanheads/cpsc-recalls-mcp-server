@@ -5,6 +5,11 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import {
+  bareAddress,
+  linkDestination,
+  escapeMarkdown as md,
+} from '@/mcp-server/tools/markdown-escape.js';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** Static jurisdiction note included in every response. */
@@ -13,7 +18,7 @@ const JURISDICTION =
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
-  'Recall fields are relayed verbatim from the CPSC record and are neither edited nor verified by this server. CPSC records occasionally carry missing or inconsistent text. Check cpsc_url before acting on a recall for a consumer-facing decision.';
+  'Recall fields are CPSC record text, with HTML markup and character codes converted to plain text; this server does not otherwise edit or verify them. CPSC records occasionally carry missing or inconsistent text. Check cpsc_url before acting on a recall for a consumer-facing decision.';
 
 /** Rendered in place of an upstream narrative field CPSC left null or empty. */
 const ABSENT_TEXT = '_Not provided by CPSC._';
@@ -21,16 +26,17 @@ const ABSENT_TEXT = '_Not provided by CPSC._';
 const ABSENT_TEXT_SEE_PAGE = '_Not provided by CPSC. See the CPSC recall page._';
 
 /**
- * Renders relayed CPSC text as a markdown blockquote, so upstream narrative is visually
- * distinct from the server's own guidance. Prefixes every line — CPSC descriptions and
- * remedy instructions are frequently multi-line.
+ * Renders relayed CPSC text as a Markdown-escaped blockquote, so upstream narrative is
+ * visually distinct from the server's own guidance and every character of it stays
+ * visible. Prefixes every line — CPSC descriptions and remedy instructions are frequently
+ * multi-line.
  *
  * Callers must leave a blank line after the returned block. Markdown lazy continuation
  * pulls an unseparated following line into the quote, which would render server-authored
  * guidance as CPSC source text — the exact opposite of the framing.
  */
 function asSourceText(text: string): string {
-  return text
+  return md(text)
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n');
@@ -158,7 +164,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     source_note: z
       .string()
       .describe(
-        'Provenance caveat: recall fields are relayed from CPSC unedited and unverified; check cpsc_url before a consumer-facing decision.',
+        'Provenance caveat: recall fields are CPSC record text with HTML markup and character codes converted to plain text, not otherwise edited or verified; check cpsc_url before a consumer-facing decision.',
       ),
   }),
 
@@ -173,7 +179,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, or sent an unreadable response',
+      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, reported a temporary failure reading its recall data, or sent an unreadable response',
       recovery: 'The CPSC recall service is occasionally unavailable. Retry in a few seconds.',
       retryable: true,
     },
@@ -275,9 +281,11 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
   format(result) {
     const lines: string[] = [];
 
-    lines.push(`# [${result.recall_number}] — ${result.title}`);
+    lines.push(`# [${result.recall_number}] — ${md(result.title)}`);
     lines.push(`Issued: ${result.recall_date} | Last updated: ${result.last_updated}`);
-    lines.push('Quoted blocks below are CPSC source text, relayed unedited.');
+    lines.push(
+      'Quoted blocks below are CPSC source text, converted to plain text; a backslash before a Markdown character is an escape, not part of the text.',
+    );
     lines.push('');
 
     lines.push('**⚠️ Hazard (CPSC source text):**');
@@ -289,7 +297,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     lines.push('');
 
     const remedyTypes =
-      result.remedy_options.length > 0 ? result.remedy_options.join(', ') : 'Not specified';
+      result.remedy_options.length > 0 ? md(result.remedy_options.join(', ')) : 'Not specified';
     lines.push(`**✅ Remedy:** ${remedyTypes} — instructions from CPSC:`);
     lines.push(
       result.remedy_instructions ? asSourceText(result.remedy_instructions) : ABSENT_TEXT_SEE_PAGE,
@@ -304,7 +312,9 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
 
     lines.push('## Products Affected (CPSC source text)');
     for (const p of result.products) {
-      lines.push(`> - ${p.name} — ${p.units_recalled || 'units not specified'}`);
+      lines.push(
+        `> - ${md(p.name)} — ${p.units_recalled ? md(p.units_recalled) : 'units not specified'}`,
+      );
     }
     if (result.products.length === 0) {
       lines.push(ABSENT_TEXT);
@@ -314,7 +324,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       if (result.products.length > 0) {
         lines.push('>');
       }
-      lines.push(`> UPCs (recall-level): ${result.upcs.join(', ')}`);
+      lines.push(`> UPCs (recall-level): ${md(result.upcs.join(', '))}`);
     }
     lines.push('');
     lines.push('Model numbers are in the description below if not listed here.');
@@ -334,7 +344,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.retailers.length > 0) {
       lines.push('## Sold By (CPSC source text)');
       for (const r of result.retailers) {
-        lines.push(`> - ${r}`);
+        lines.push(`> - ${md(r)}`);
       }
       lines.push('');
     }
@@ -343,17 +353,17 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.manufacturers.length > 0) {
       lines.push('## Manufactured By');
       for (const org of result.manufacturers) {
-        lines.push(`- ${org}`);
+        lines.push(`- ${md(org)}`);
       }
     }
     if (result.importers.length > 0) {
       lines.push('## Imported By');
       for (const org of result.importers) {
-        lines.push(`- ${org}`);
+        lines.push(`- ${md(org)}`);
       }
     }
     if (result.manufacturer_countries.length > 0) {
-      lines.push(`Country of origin: ${result.manufacturer_countries.join(', ')}`);
+      lines.push(`Country of origin: ${md(result.manufacturer_countries.join(', '))}`);
     }
     if (
       result.manufacturers.length > 0 ||
@@ -366,7 +376,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.distributors.length > 0) {
       lines.push('## Distributors');
       for (const d of result.distributors) {
-        lines.push(`- ${d}`);
+        lines.push(`- ${md(d)}`);
       }
       lines.push('');
     }
@@ -374,7 +384,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.images.length > 0) {
       lines.push(`## Images (${result.images.length}) — captions are CPSC source text`);
       for (const img of result.images) {
-        lines.push(`- ${img.url}`);
+        lines.push(`- ${bareAddress(img.url)}`);
         lines.push(asSourceText(img.caption));
         lines.push('');
       }
@@ -383,7 +393,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.coordinated_recalls.length > 0) {
       lines.push('## Coordinated Recalls');
       for (const url of result.coordinated_recalls) {
-        lines.push(`- ${url}`);
+        lines.push(`- ${bareAddress(url)}`);
       }
       lines.push('');
     }
@@ -396,7 +406,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       lines.push('');
     }
 
-    lines.push(`[View official CPSC recall page](${result.cpsc_url})`);
+    lines.push(`[View official CPSC recall page](${linkDestination(result.cpsc_url)})`);
     lines.push(`Source: ${result.source_note}`);
     lines.push(`CPSC jurisdiction: ${result.cpsc_jurisdiction}`);
 

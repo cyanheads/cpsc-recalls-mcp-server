@@ -7,6 +7,7 @@
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { normalizeRecall } from './normalize-text.js';
 import type { CpscSearchParams, RawRecall } from './types.js';
 
 const BASE_URL = 'https://www.saferproducts.gov/RestWebServices/Recall';
@@ -14,6 +15,18 @@ const BASE_URL = 'https://www.saferproducts.gov/RestWebServices/Recall';
 const TIMEOUT_MS = 30_000;
 /** Upper bound on how much of the upstream error text is echoed back in the thrown message. */
 const ERROR_ROW_MESSAGE_LIMIT = 200;
+
+/**
+ * The error-row message CPSC sends when its data source failed, rather than the request.
+ * Every other error-row message (an unparseable date filter, for example) is deterministic.
+ */
+const PROVIDER_FAILURE = /underlying provider failed/i;
+
+/** Query parameters by upstream name; an absent or empty value is not sent. */
+type QueryParams = Partial<Record<string, string>>;
+
+/** One fetch's outcome: the records, or the message of a provider-failure error row. */
+type FetchOutcome = { recalls: RawRecall[] } | { providerFailure: string };
 
 /**
  * True when a row is CPSC's error row rather than a recall record.
@@ -35,21 +48,23 @@ export class CpscRecallService {
    * server-side pagination); client-side limiting must be applied by callers.
    */
   search(params: CpscSearchParams, ctx: Context): Promise<RawRecall[]> {
-    const url = this.buildUrl({
-      ProductName: params.ProductName,
-      Manufacturer: params.Manufacturer,
-      Retailer: params.Retailer,
-      Importer: params.Importer,
-      Distributor: params.Distributor,
-      RecallTitle: params.RecallTitle,
-      RecallDescription: params.RecallDescription,
-      Remedy: params.Remedy,
-      RecallDateStart: params.RecallDateStart,
-      RecallDateEnd: params.RecallDateEnd,
-      LastPublishDateStart: params.LastPublishDateStart,
-      LastPublishDateEnd: params.LastPublishDateEnd,
-    });
-    return this.fetchRecalls(url, ctx);
+    return this.fetchRecalls(
+      {
+        ProductName: params.ProductName,
+        Manufacturer: params.Manufacturer,
+        Retailer: params.Retailer,
+        Importer: params.Importer,
+        Distributor: params.Distributor,
+        RecallTitle: params.RecallTitle,
+        RecallDescription: params.RecallDescription,
+        Remedy: params.Remedy,
+        RecallDateStart: params.RecallDateStart,
+        RecallDateEnd: params.RecallDateEnd,
+        LastPublishDateStart: params.LastPublishDateStart,
+        LastPublishDateEnd: params.LastPublishDateEnd,
+      },
+      ctx,
+    );
   }
 
   /**
@@ -57,8 +72,7 @@ export class CpscRecallService {
    * exists (API returns empty array for unknown numbers).
    */
   async getByNumber(recallNumber: string, ctx: Context): Promise<RawRecall | null> {
-    const url = this.buildUrl({ RecallNumber: recallNumber });
-    const results = await this.fetchRecalls(url, ctx);
+    const results = await this.fetchRecalls({ RecallNumber: recallNumber }, ctx);
     return results[0] ?? null;
   }
 
@@ -67,19 +81,49 @@ export class CpscRecallService {
    * dates returns the whole dataset (over 10,000 records), which is too large to be useful.
    */
   getRecent(dateStart: string, dateEnd: string, ctx: Context): Promise<RawRecall[]> {
-    const url = this.buildUrl({ RecallDateStart: dateStart, RecallDateEnd: dateEnd });
-    return this.fetchRecalls(url, ctx);
+    return this.fetchRecalls({ RecallDateStart: dateStart, RecallDateEnd: dateEnd }, ctx);
   }
 
-  private buildUrl(params: Partial<Record<string, string>>): string {
-    const qs = new URLSearchParams({ format: 'json' });
+  /** The request URL: `format` first, or — for the provider-failure retry — last. */
+  private buildUrl(params: QueryParams, formatLast = false): string {
+    const qs = new URLSearchParams();
+    if (!formatLast) qs.set('format', 'json');
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== '') qs.set(key, value);
     }
+    if (formatLast) qs.set('format', 'json');
     return `${BASE_URL}?${qs.toString()}`;
   }
 
-  private fetchRecalls(url: string, ctx: Context): Promise<RawRecall[]> {
+  /**
+   * Fetches the records matching `params`, their text normalized.
+   *
+   * A provider-failure error row gets one immediate retry through the same query with
+   * `format` moved last: CPSC serves a failed query's error row from a cache keyed on the
+   * exact query string, so repeating the URL keeps failing while the reordered one misses
+   * the cache. A second provider failure surfaces as retryable.
+   */
+  private async fetchRecalls(params: QueryParams, ctx: Context): Promise<RawRecall[]> {
+    let outcome = await this.fetchOnce(this.buildUrl(params), ctx);
+    if ('providerFailure' in outcome) {
+      ctx.log.info('CPSC reported a provider failure; retrying with the query reordered', {
+        upstreamMessage: outcome.providerFailure,
+      });
+      outcome = await this.fetchOnce(this.buildUrl(params, true), ctx);
+    }
+    if ('providerFailure' in outcome) {
+      throw serviceUnavailable(`CPSC reported a temporary failure: ${outcome.providerFailure}`, {
+        retryable: true,
+      });
+    }
+    return outcome.recalls.map(normalizeRecall);
+  }
+
+  /**
+   * One fetch of `url` under the retry boundary. A provider-failure row comes back as a
+   * value rather than a throw, so `withRetry` never repeats a URL CPSC answers from cache.
+   */
+  private fetchOnce(url: string, ctx: Context): Promise<FetchOutcome> {
     return withRetry(
       async () => {
         const response = await fetchWithTimeout(url, TIMEOUT_MS, ctx, {
@@ -103,16 +147,23 @@ export class CpscRecallService {
         }
         const errorRow = data.find(isCpscErrorRow);
         if (errorRow !== undefined) {
-          const upstreamMessage = (errorRow as Partial<RawRecall>)?.Title;
+          const title = (errorRow as Partial<RawRecall>)?.Title;
+          const upstreamMessage =
+            typeof title === 'string' && title.length > 0
+              ? title.slice(0, ERROR_ROW_MESSAGE_LIMIT)
+              : undefined;
+          if (upstreamMessage && PROVIDER_FAILURE.test(upstreamMessage)) {
+            return { providerFailure: upstreamMessage };
+          }
           throw serviceUnavailable(
-            typeof upstreamMessage === 'string' && upstreamMessage.length > 0
-              ? `CPSC rejected the request: ${upstreamMessage.slice(0, ERROR_ROW_MESSAGE_LIMIT)}`
+            upstreamMessage
+              ? `CPSC rejected the request: ${upstreamMessage}`
               : 'CPSC rejected the request without saying why.',
             // Deterministic — the same request produces the same error row, so skip retries.
             { retryable: false },
           );
         }
-        return data as RawRecall[];
+        return { recalls: data as RawRecall[] };
       },
       {
         operation: 'CpscRecallService.fetchRecalls',
