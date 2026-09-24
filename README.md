@@ -45,17 +45,19 @@ CPSC jurisdiction is consumer products only — food/drugs (FDA), motor vehicles
 
 ### `cpsc_search_recalls` <sub>tool</sub>
 
-- Optional substring filters — `product_name`, `manufacturer`, `retailer`, `importer`, `distributor`, `title_search`, `description_search`, `remedy` (free-text instructions, not the `remedy_options` enum) — all combine with AND; `title_search` is usually highest-signal, `hazard_search` matches hazard text, product names, or remedy instructions client-side (the upstream `Hazard` parameter never matches, so it isn't exposed)
+- Nine text filters — `product_name`, `manufacturer`, `retailer`, `importer`, `distributor`, `title_search`, `description_search`, `remedy` (free-text instructions, not the `remedy_options` categories), and `hazard_search` (hazard text, product names, or remedy instructions; `hazard` is accepted as an alias) — all combine with AND; `title_search` is usually highest-signal
+- A search needs at least one criterion — a non-blank text filter or a date bound; `limit`/`offset` alone fail with `missing_criteria`, whose hint points browsing to `cpsc_get_recent`. A blank or whitespace-only filter counts as omitted
+- Word matching: every whitespace-separated word of a text filter must appear in that filter's field, in any order and case-insensitively; straight and curly apostrophes match each other, and `%`, `_`, and `[…]` match literally. No stemming or fuzzy matching. Each text filter accepts up to 500 characters
 - Two independent date axes: `date_start`/`date_end` bound the recall issue date, `updated_start`/`updated_end` bound the date CPSC last published it; all four must be real calendar dates and a reversed range throws `invalid_date_range`
-- Client-side `limit` (1–200, default 20) and `offset` (default 0) applied after the full upstream fetch; `total_found` counts after `hazard_search` and before `offset`/`limit` narrow the window, `has_more` is the paging signal, `truncated` is limit-only
+- `limit` (1–200, default 20) and `offset` (default 0) page through `total_found`, which counts every match before the window; a page returns fewer than `limit` recalls when it reaches the 64,000-byte response size budget, and its notice names the offset to continue from. `has_more` is the paging signal and `truncated` always equals it
 - Returns hazard descriptions, remedy options and instructions, products, UPCs, manufacturer/importer/retailer/distributor names, images, `cpsc_url`, and per-recall `data_quality_notes`; manufacturer and importer render as separate roles — try `importer`, `retailer`, or `distributor` when `manufacturer` comes back empty
-- `no_results` is a typed error, not an empty array; `upstream_rejected` (non-retryable) relays CPSC's own rejection, `upstream_error` (retryable) covers transient outages
+- Zero matches is an empty success, not an error: `effectiveQuery` echoes the criteria as applied, and a notice says which criterion to relax (the count before `hazard_search` emptied the set, fewer words, another company role, wider dates). An offset past the last match returns an empty page with its own notice. `upstream_rejected` (non-retryable) relays CPSC's own rejection, `upstream_error` (retryable) covers transient outages
 
 ---
 
 ### `cpsc_get_recall` <sub>tool</sub>
 
-- Accepts modern 5-digit recall numbers (e.g. `"25043"`) and historical 1998–2001 records with letter suffixes (e.g. `"99003a"`)
+- Accepts modern 5-digit recall numbers (e.g. `"25043"`) and historical 1998–2001 records with letter suffixes (e.g. `"99003a"`); a malformed number is rejected as invalid input with both forms spelled out
 - Returns the complete record — full description, all hazard and remedy detail, every product variant, UPCs, incident/injury narrative, manufacturer/importer/retailer/distributor names, country of manufacture, images, and coordinated-agency recall URLs
 - `description` is nullable — a small number of genuine CPSC records carry no description text, and model numbers are usually embedded there rather than in a structured field
 - Manufacturer and importer render under separate headings so role attribution survives into `content[]`
@@ -66,9 +68,9 @@ CPSC jurisdiction is consumer products only — food/drugs (FDA), motor vehicles
 
 ### `cpsc_get_recent` <sub>tool</sub>
 
-- Look-back window of 1–365 days (default 30), always applied — without one the upstream API returns 9,800+ records
-- `limit` (1–100, default 20) and `offset` (default 0) page through `total_found`; narrowing `days` cannot page further back — the window is anchored to today, so shrinking it drops the oldest records rather than advancing past the newest
-- `has_more` is the paging signal; `truncated` stays limit-only and doesn't move with `offset`
+- Look-back window of 1–365 days (default 30), anchored to today; older recalls are reachable through `cpsc_search_recalls` date bounds
+- `limit` (1–100, default 20) and `offset` (default 0) page through `total_found`; a page returns fewer than `limit` recalls when it reaches the 64,000-byte response size budget. Narrowing `days` cannot page further back — the window is anchored to today, so shrinking it drops the oldest records rather than advancing past the newest
+- `has_more` is the paging signal and `truncated` always equals it; an empty window, an offset past the last recall, and a budget-cut page each carry a notice saying what to do next
 - Returns a lightweight record per recall — number, date, title, hazards, remedy types, product names, `cpsc_url` — plus `data_quality_notes` for gaps CPSC left empty
 - Use `cpsc_get_recall` to retrieve full detail for any result
 
@@ -79,14 +81,14 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 CPSC-specific:
 
 - Full client for the CPSC saferproducts.gov public recalls API — search, single-recall detail, and a recent-recalls feed
-- Client-side filtering (`hazard_search`) applied over the complete upstream result set so `total_found` and `has_more` stay accurate
+- Every-word matching on all nine text filters, applied over the complete result set before paging so `total_found` and `has_more` stay accurate
 - Handles both modern 5-digit recall numbers and historical 1998–2001 records with letter suffixes
 - Jurisdiction boundary documented in every response — flags food, vehicle, and drug recalls as out of scope before an agent misattributes them
 
 Agent-friendly output:
 
 - Provenance on every response — `source_note`, `cpsc_url`, and `(CPSC source text)` blockquote labels distinguish relayed CPSC narrative from the server's own guidance
-- Pagination discriminators — `total_found`, `offset`, `has_more`, and `truncated` on every search/recent response so agents can tell when results are clipped and page with `offset`
+- Pagination discriminators — `total_found`, `offset`, `has_more`, and `truncated` on every search/recent response so agents can tell when results are clipped and page with `offset`; each surface of a page stays within a 64,000-byte budget, and a notice gives the next offset when the budget ends a page early
 - `data_quality_notes` on every response — gaps observed in the upstream record (missing hazard text, no product entries), derived from which fields CPSC left blank rather than any judgment call
 - Jurisdiction note (`cpsc_jurisdiction`) on every response — lets agents route callers to the correct agency (FDA, NHTSA, USCG, EPA) when a product is out of scope
 
@@ -255,7 +257,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | Directory | Purpose |
 |:---|:---|
 | `src/index.ts` | `createApp()` entry point — registers tools and inits the CPSC service |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Three tools: search, get-recall, get-recent |
+| `src/mcp-server/tools` | Tool definitions (`definitions/*.tool.ts`) — search, get-recall, get-recent — plus `response-budget.ts`, the page size budget the two list tools share |
 | `src/services/cpsc-recall` | CPSC recall service — API client, types, normalization |
 
 ## Development guide

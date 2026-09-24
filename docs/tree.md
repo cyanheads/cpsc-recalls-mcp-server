@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-09-19 20:39:15
+Generated on: 2026-09-24 20:38:18
 
 ```text
 cpsc-recalls-mcp-server/
@@ -139,10 +139,11 @@ cpsc-recalls-mcp-server/
 │   │   ├── resources/
 │   │   │   └── definitions/
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── cpsc-get-recall.tool.ts
-│   │           ├── cpsc-get-recent.tool.ts
-│   │           └── cpsc-search-recalls.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── cpsc-get-recall.tool.ts
+│   │       │   ├── cpsc-get-recent.tool.ts
+│   │       │   └── cpsc-search-recalls.tool.ts
+│   │       └── response-budget.ts
 │   ├── services/
 │   │   └── cpsc-recall/
 │   │       ├── cpsc-recall-service.ts
@@ -155,9 +156,11 @@ cpsc-recalls-mcp-server/
 │   │   └── cpsc-recall/
 │   │       └── cpsc-recall-service.test.ts
 │   └── tools/
+│       ├── advertised-text.test.ts
 │       ├── cpsc-get-recall.tool.test.ts
 │       ├── cpsc-get-recent.tool.test.ts
-│       └── cpsc-search-recalls.tool.test.ts
+│       ├── cpsc-search-recalls.tool.test.ts
+│       └── response-budget.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
