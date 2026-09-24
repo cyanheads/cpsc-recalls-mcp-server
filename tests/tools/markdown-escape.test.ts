@@ -58,6 +58,23 @@ describe('escapeMarkdown', () => {
     expect(
       escapeMarkdown('see https://www.cpsc.gov/a_b*c?_x=1 or www.amazon.com/s?ref_=x_ now_'),
     ).toBe('see https://www.cpsc.gov/a_b*c?_x=1 or www.amazon.com/s?ref_=x_ now\\_');
+    expect(escapeMarkdown('(www.x.com/a*b*) "https://a_b.x.com/c*d*"')).toBe(
+      '(www.x.com/a*b*) "https://a_b.x.com/c*d*"',
+    );
+  });
+
+  /**
+   * GFM links a `www.` address only after whitespace or `(`, `*`, `_`, `~`, and no address
+   * whose host has `_` in its last two labels; left unescaped, such an address renders
+   * `*b*` as emphasis.
+   */
+  it('escapes an address GFM does not autolink as the text it renders as', () => {
+    expect(escapeMarkdown('"www.x.com/a*b*" or x.www.y.com/_c_')).toBe(
+      '"www.x.com/a\\*b\\*" or x.www.y.com/\\_c\\_',
+    );
+    expect(escapeMarkdown('https://my_site.com/a*b* and https://x.a_b.com/c*d*')).toBe(
+      'https://my_site.com/a\\*b\\* and https://x.a_b.com/c\\*d\\*',
+    );
   });
 
   /** No renderer links an address whose host starts with punctuation, so it is plain text. */
@@ -118,6 +135,13 @@ describe('linkDestination', () => {
     );
   });
 
+  /** A link destination reads backslash escapes and references, which would change the address. */
+  it('backslash-escapes a backslash and an "&" that opens a character reference', () => {
+    expect(linkDestination('https://x.gov/Kids&amp;Co\\Toys&#38;x&y')).toBe(
+      'https://x.gov/Kids\\&amp;Co\\\\Toys\\&#38;x&y',
+    );
+  });
+
   it('returns an address with nothing to encode unchanged, existing escapes included', () => {
     const url = 'https://www.cpsc.gov/Recalls/2025/Acme-Recalls-Widgets?lang=eng&rn=25043%20';
     expect(linkDestination(url)).toBe(url);
@@ -130,6 +154,13 @@ describe('bareAddress', () => {
       'https://www.cpsc.gov/s3fs-public/Neon%20Nitro%208%20%28top%20view%29_0.png',
     );
     expect(bareAddress('https://example.com/a_b*.png')).toBe('https://example.com/a_b*.png');
+  });
+
+  /** A GFM autolink shows a backslash literally, so the escapes a link destination needs stay out. */
+  it('leaves a backslash and a character reference in an autolinked address unescaped', () => {
+    expect(bareAddress('https://x.gov/Kids&amp;Co\\Toys.png')).toBe(
+      'https://x.gov/Kids&amp;Co\\Toys.png',
+    );
   });
 
   /** GFM leaves trailing punctuation out of an autolink; records 26799 and 26793 end so. */
