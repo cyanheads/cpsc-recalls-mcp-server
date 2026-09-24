@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-09-24
+
+CPSC text reaches both surfaces as plain text, content[] escapes Markdown and encodes addresses so every character and link survives, and a transient CPSC provider failure gets one retry before surfacing as retryable upstream_error.
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-09-24 · ⚠️ Breaking
 
 cpsc_search_recalls now requires a criterion, matches every word of a text filter, and returns zero matches as an empty success; both list tools cap each page at 64,000 bytes, and truncated now equals has_more.

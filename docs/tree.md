@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-09-24 21:16:21
+Generated on: 2026-09-24 22:15:42
 
 ```text
 cpsc-recalls-mcp-server/
@@ -144,10 +144,12 @@ cpsc-recalls-mcp-server/
 │   │       │   ├── cpsc-get-recall.tool.ts
 │   │       │   ├── cpsc-get-recent.tool.ts
 │   │       │   └── cpsc-search-recalls.tool.ts
+│   │       ├── markdown-escape.ts
 │   │       └── response-budget.ts
 │   ├── services/
 │   │   └── cpsc-recall/
 │   │       ├── cpsc-recall-service.ts
+│   │       ├── normalize-text.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
@@ -155,13 +157,16 @@ cpsc-recalls-mcp-server/
 │   ├── resources/
 │   ├── services/
 │   │   └── cpsc-recall/
-│   │       └── cpsc-recall-service.test.ts
-│   └── tools/
-│       ├── advertised-text.test.ts
-│       ├── cpsc-get-recall.tool.test.ts
-│       ├── cpsc-get-recent.tool.test.ts
-│       ├── cpsc-search-recalls.tool.test.ts
-│       └── response-budget.test.ts
+│   │       ├── cpsc-recall-service.test.ts
+│   │       └── normalize-text.test.ts
+│   ├── tools/
+│   │   ├── advertised-text.test.ts
+│   │   ├── cpsc-get-recall.tool.test.ts
+│   │   ├── cpsc-get-recent.tool.test.ts
+│   │   ├── cpsc-search-recalls.tool.test.ts
+│   │   ├── markdown-escape.test.ts
+│   │   └── response-budget.test.ts
+│   └── linear-time.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
