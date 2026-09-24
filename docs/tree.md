@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-09-24 20:38:18
+Generated on: 2026-09-24 21:16:21
 
 ```text
 cpsc-recalls-mcp-server/
@@ -25,6 +25,7 @@ cpsc-recalls-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md

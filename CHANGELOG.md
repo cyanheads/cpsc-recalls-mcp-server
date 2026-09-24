@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-09-24 · ⚠️ Breaking
+
+cpsc_search_recalls now requires a criterion, matches every word of a text filter, and returns zero matches as an empty success; both list tools cap each page at 64,000 bytes, and truncated now equals has_more.
+
 ## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-09-19 · ⚠️ Breaking
 
 Adopts mcp-ts-core 0.13.6 — the server declares a stateless session posture, cpsc_search_recalls accepts 'hazard' as an alias for hazard_search, and the Bun engine floor rises to 1.4.0, which breaks on older Bun runtimes.
