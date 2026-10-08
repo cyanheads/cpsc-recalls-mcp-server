@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: cpsc-recalls-mcp-server
-abstract: "MCP server for US consumer product recalls from the Consumer Product Safety Commission — hazards, remedies, and affected products."
+abstract: "MCP server for US consumer product recalls from the Consumer Product Safety Commission: hazards, remedies, and affected products."
 type: software
 authors:
   - family-names: Hand
