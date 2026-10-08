@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-10-08
+
+Moves to mcp-ts-core ^0.13.14: integers sent for string fields, numeric strings, and null optional arguments are repaired before validation, tool errors carry their request ID, and the Docker image installs dependencies without emulating the target architecture.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-09-24
 
 CPSC text reaches both surfaces as plain text, content[] escapes Markdown and encodes addresses so every character and link survives, and a transient CPSC provider failure gets one retry before surfacing as retryable upstream_error.
