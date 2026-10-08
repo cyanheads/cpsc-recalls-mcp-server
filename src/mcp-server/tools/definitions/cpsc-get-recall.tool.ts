@@ -203,25 +203,15 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       if (err instanceof McpError && err.data?.retryable === false) {
-        throw ctx.fail(
-          'upstream_rejected',
-          detail,
-          { ...ctx.recoveryFor('upstream_rejected') },
-          { cause: err },
-        );
+        throw ctx.fail('upstream_rejected', detail, undefined, { cause: err });
       }
-      throw ctx.fail(
-        'upstream_error',
-        `CPSC API request failed: ${detail}`,
-        { ...ctx.recoveryFor('upstream_error') },
-        { cause: err },
-      );
+      throw ctx.fail('upstream_error', `CPSC API request failed: ${detail}`, undefined, {
+        cause: err,
+      });
     }
 
     if (!raw) {
-      throw ctx.fail('not_found', `No CPSC recall found with number "${input.recall_number}".`, {
-        ...ctx.recoveryFor('not_found'),
-      });
+      throw ctx.fail('not_found', `No CPSC recall found with number "${input.recall_number}".`);
     }
 
     const hazards = raw.Hazards.filter((h) => h.Name).map((h) => ({ description: h.Name }));

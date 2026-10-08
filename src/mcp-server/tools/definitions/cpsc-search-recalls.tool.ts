@@ -578,7 +578,6 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       throw ctx.fail(
         'missing_criteria',
         'cpsc_search_recalls needs at least one criterion — a non-blank text filter or a date bound. limit and offset alone do not narrow a search.',
-        { ...ctx.recoveryFor('missing_criteria') },
       );
     }
 
@@ -586,7 +585,6 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       throw ctx.fail(
         'invalid_date_range',
         `date_start "${input.date_start}" is later than date_end "${input.date_end}".`,
-        { ...ctx.recoveryFor('invalid_date_range') },
       );
     }
 
@@ -594,7 +592,6 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       throw ctx.fail(
         'invalid_date_range',
         `updated_start "${input.updated_start}" is later than updated_end "${input.updated_end}".`,
-        { ...ctx.recoveryFor('invalid_date_range') },
       );
     }
 
@@ -618,19 +615,11 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       if (err instanceof McpError && err.data?.retryable === false) {
-        throw ctx.fail(
-          'upstream_rejected',
-          detail,
-          { ...ctx.recoveryFor('upstream_rejected') },
-          { cause: err },
-        );
+        throw ctx.fail('upstream_rejected', detail, undefined, { cause: err });
       }
-      throw ctx.fail(
-        'upstream_error',
-        `CPSC API request failed: ${detail}`,
-        { ...ctx.recoveryFor('upstream_error') },
-        { cause: err },
-      );
+      throw ctx.fail('upstream_error', `CPSC API request failed: ${detail}`, undefined, {
+        cause: err,
+      });
     }
 
     /**

@@ -262,19 +262,11 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       if (err instanceof McpError && err.data?.retryable === false) {
-        throw ctx.fail(
-          'upstream_rejected',
-          detail,
-          { ...ctx.recoveryFor('upstream_rejected') },
-          { cause: err },
-        );
+        throw ctx.fail('upstream_rejected', detail, undefined, { cause: err });
       }
-      throw ctx.fail(
-        'upstream_error',
-        `CPSC API request failed: ${detail}`,
-        { ...ctx.recoveryFor('upstream_error') },
-        { cause: err },
-      );
+      throw ctx.fail('upstream_error', `CPSC API request failed: ${detail}`, undefined, {
+        cause: err,
+      });
     }
 
     const total_found = raw.length;
