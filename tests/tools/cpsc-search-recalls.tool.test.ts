@@ -265,8 +265,8 @@ describe('cpsc_search_recalls', () => {
         '**UPCs:** 012345678901',
         '**Sold by:** Target',
         '**Manufacturer:** ACME Corp',
-        '**Images (1):** Product photo: https://example.com/img.jpg',
-        '[View recall](https://www.cpsc.gov/Recalls/2025/acme-widget)',
+        '**Images (1):** ![Product photo](<https://example.com/img.jpg>)',
+        '[View recall](<https://www.cpsc.gov/Recalls/2025/acme-widget>)',
         '---',
         '## [25044] — Sparse Recall (2024-01-02)',
         'CPSC source fields:',
@@ -276,7 +276,7 @@ describe('cpsc_search_recalls', () => {
         '**Sold by:** Not specified',
         '**Manufacturer/Importer:** Not specified',
         '**Images:** None',
-        '[View recall](https://www.cpsc.gov/Recalls/2024/sparse)',
+        '[View recall](<https://www.cpsc.gov/Recalls/2024/sparse>)',
         '**Data quality (server-assessed):** CPSC listed no hazard description for this recall.',
         '---',
         'Showing 2 of 2 recalls, starting at offset 0.',
@@ -430,18 +430,18 @@ describe('cpsc_search_recalls', () => {
       cpsc_url: 'https://www.cpsc.gov/Recalls/2024/Amer Sports Winter & Outdoor',
     };
 
-    it('escapes interpolated text, keeps image addresses bare, and encodes spaces in the link', () => {
+    it('escapes interpolated text, renders image addresses inline, and preserves spaces in the link', () => {
       const text = formatText(makeFormatResult(marked));
 
       expect(text).toContain('## [25043] — Talon \\[1000\\] Recall (2025-03-15)');
       expect(text).toContain('**Hazard:** Serial 1HFVE05\\*\\*K4000003 1HFVE05\\*\\*K4003902');
       expect(text).toContain('**Sold by:** Sold at: Ross\n\\- Simply 6');
       expect(text).toContain(
-        '**Images (1):** EMABF\\*WS\\* & LMABF\\*WS\\*: https://www.cpsc.gov/s3fs-public/a_b*.png',
+        '**Images (1):** ![EMABF\\*WS\\* & LMABF\\*WS\\*](<https://www.cpsc.gov/s3fs-public/a_b*.png>)',
       );
       expect(text).toContain('**Remedy:** Refund — Lids labeled \\\\"CABINET.\\\\" — call now');
       expect(text).toContain(
-        '[View recall](https://www.cpsc.gov/Recalls/2024/Amer%20Sports%20Winter%20&%20Outdoor)',
+        '[View recall](<https://www.cpsc.gov/Recalls/2024/Amer Sports Winter & Outdoor>)',
       );
     });
 
@@ -484,17 +484,17 @@ describe('cpsc_search_recalls', () => {
       expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
     });
 
-    it('renders an image address without spaces exactly as before', async () => {
+    it('renders an image address without spaces as an image', async () => {
       mockSearch.mockResolvedValueOnce([makeRaw()]);
       const result = await runToolContract(cpscSearchRecalls, { title_search: 'widget' });
 
       expect(wireText(result)).toContain(
-        '**Images (1):** Product photo: https://example.com/img.jpg\n',
+        '**Images (1):** ![Product photo](<https://example.com/img.jpg>)\n',
       );
     });
 
     /** Record 24136's image addresses hold spaces; a GFM autolink would end at the first one. */
-    it('encodes spaces in an image address and leaves structuredContent unchanged', async () => {
+    it('preserves spaces in an image address and leaves structuredContent unchanged', async () => {
       const url = 'https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png';
       mockSearch.mockResolvedValueOnce([
         makeRaw({ Images: [{ URL: url, Caption: 'Recalled Cannondale 26" Dave bicycle' }] }),
@@ -503,12 +503,12 @@ describe('cpsc_search_recalls', () => {
 
       expect(result.structuredContent).toMatchObject({ recalls: [{ images: [{ url }] }] });
       expect(wireText(result)).toContain(
-        '**Images (1):** Recalled Cannondale 26" Dave bicycle: https://www.cpsc.gov/s3fs-public/Recalled%20Cannondale%2026”%20Dave%20bicycle.png\n',
+        '**Images (1):** ![Recalled Cannondale 26" Dave bicycle](<https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png>)\n',
       );
     });
 
-    /** Each record's image address holds 2,000 spaces: 2,000 bytes of JSON, 6,000 once encoded. */
-    it('charges the budget for the encoded image address bytes it emits', async () => {
+    /** Each record's image address holds 2,000 spaces: 2,000 bytes on each surface, plus image syntax. */
+    it('charges the budget for the rendered image address bytes it emits', async () => {
       const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
       mockSearch.mockResolvedValueOnce(
         Array.from({ length: 60 }, (_, i) =>
@@ -524,7 +524,7 @@ describe('cpsc_search_recalls', () => {
       });
       const text = wireText(result);
 
-      expect(text).toContain(`Photo: https://x.gov/${'%20'.repeat(2_000)}.png`);
+      expect(text).toContain(`![Photo](<https://x.gov/${' '.repeat(2_000)}.png>)`);
       expect(utf8(text)).toBeLessThanOrEqual(64_000);
       expect(utf8(text)).toBeGreaterThan(64_000 - 7_000);
       expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);

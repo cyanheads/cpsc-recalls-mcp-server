@@ -6,7 +6,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { linkDestination, escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
+import { markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
   budgetCutNotice,
   countWithinBudget,
@@ -97,7 +98,7 @@ function renderRecallBlock(r: RecentRecall): string {
     'CPSC source fields:',
     `Hazard: ${hazardText}  |  Remedy: ${remedyText}`,
     `Products: ${productText}`,
-    `[CPSC page](${linkDestination(r.cpsc_url)})`,
+    markdownLink('CPSC page', r.cpsc_url),
   ];
   if (r.data_quality_notes.length > 0) {
     lines.push(`**Data quality (server-assessed):** ${r.data_quality_notes.join(' ')}`);

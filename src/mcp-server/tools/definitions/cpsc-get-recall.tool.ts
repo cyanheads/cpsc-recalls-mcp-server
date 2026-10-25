@@ -5,11 +5,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import {
-  bareAddress,
-  linkDestination,
-  escapeMarkdown as md,
-} from '@/mcp-server/tools/markdown-escape.js';
+import { markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** Static jurisdiction note included in every response. */
@@ -374,7 +371,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.images.length > 0) {
       lines.push(`## Images (${result.images.length}) — captions are CPSC source text`);
       for (const img of result.images) {
-        lines.push(`- ${bareAddress(img.url)}`);
+        lines.push(`- ${markdownImage(img.caption, img.url)}`);
         lines.push(asSourceText(img.caption));
         lines.push('');
       }
@@ -383,7 +380,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     if (result.coordinated_recalls.length > 0) {
       lines.push('## Coordinated Recalls');
       for (const url of result.coordinated_recalls) {
-        lines.push(`- ${bareAddress(url)}`);
+        lines.push(`- ${markdownLink(url, url)}`);
       }
       lines.push('');
     }
@@ -396,7 +393,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       lines.push('');
     }
 
-    lines.push(`[View official CPSC recall page](${linkDestination(result.cpsc_url)})`);
+    lines.push(markdownLink('View official CPSC recall page', result.cpsc_url));
     lines.push(`Source: ${result.source_note}`);
     lines.push(`CPSC jurisdiction: ${result.cpsc_jurisdiction}`);
 

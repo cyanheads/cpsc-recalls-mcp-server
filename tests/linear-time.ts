@@ -1,23 +1,19 @@
 /**
- * @fileoverview Timing helper for tests that pin a text pass to linear time: measures one
- * call at 5,000 and at 80,000 characters.
+ * @fileoverview Thread-CPU measurements for text passes at 5,000 and 80,000 characters.
  * @module tests/linear-time
  */
 
 /** Characters processed per trial, so both sizes are timed over the same total work. */
-const WORK_PER_TRIAL = 320_000;
+const WORK_PER_TRIAL = 80_000;
 const TRIALS = 5;
 
-/** Fastest per-call time, in milliseconds, of `run(input)` over {@link TRIALS} trials. */
+/** Per-call thread CPU time in milliseconds, excluding other workers and scheduler delays. */
 function perCallMs(run: (input: string) => unknown, input: string): number {
   const calls = Math.ceil(WORK_PER_TRIAL / input.length);
-  let best = Number.POSITIVE_INFINITY;
-  for (let trial = 0; trial < TRIALS; trial++) {
-    const start = performance.now();
-    for (let call = 0; call < calls; call++) run(input);
-    best = Math.min(best, (performance.now() - start) / calls);
-  }
-  return best;
+  const start = process.threadCpuUsage();
+  for (let call = 0; call < calls; call++) run(input);
+  const elapsed = process.threadCpuUsage(start);
+  return (elapsed.user + elapsed.system) / 1_000 / calls;
 }
 
 /**
@@ -29,7 +25,20 @@ export function timeAcrossSizes(
   make: (length: number) => string,
   run: (input: string) => unknown,
 ): { ms80k: number; ratio: number } {
-  const ms5k = perCallMs(run, make(5_000));
-  const ms80k = perCallMs(run, make(80_000));
+  const small = make(5_000);
+  const large = make(80_000);
+  // Warm both sizes before comparing, then alternate order to avoid tiering one side only.
+  perCallMs(run, small);
+  perCallMs(run, large);
+  let ms5k = Number.POSITIVE_INFINITY;
+  let ms80k = Number.POSITIVE_INFINITY;
+  for (let trial = 0; trial < TRIALS; trial++) {
+    const sizes = trial % 2 === 0 ? [small, large] : [large, small];
+    for (const input of sizes) {
+      const elapsed = perCallMs(run, input);
+      if (input === small) ms5k = Math.min(ms5k, elapsed);
+      else ms80k = Math.min(ms80k, elapsed);
+    }
+  }
   return { ms80k, ratio: ms80k / ms5k };
 }

@@ -82,37 +82,3 @@ export function escapeMarkdown(text: string): string {
           : `${lead}${indent}\\${marker}`,
     );
 }
-
-/**
- * `url` with whitespace, `<`, `>`, and parentheses percent-encoded as UTF-8 — the
- * characters that end or unbalance an address in Markdown. The address they name is the same.
- */
-function encodeDelimiters(url: string): string {
-  return url.replace(/[\s<>()]/gu, (char) =>
-    char === '(' ? '%28' : char === ')' ? '%29' : encodeURIComponent(char),
-  );
-}
-
-/**
- * `url` as a Markdown link destination. A bare destination ends at the first space and
- * cannot hold `<`, `>`, or an unbalanced parenthesis, so those are percent-encoded. A
- * destination also reads backslash escapes and character references, so a backslash and an
- * `&` opening a reference are backslash-escaped, and the link points at `url` as stored.
- */
-export function linkDestination(url: string): string {
-  return encodeDelimiters(url).replace(/\\|&(?=#?[A-Za-z\d]{1,32};)/g, '\\$&');
-}
-
-/**
- * `url` shown as a bare address. A web address has its delimiters percent-encoded, and a
- * trailing `.`, `_`, or `~` — which GFM leaves out of an autolink — is percent-encoded too,
- * so the autolink covers the whole address; encoding those unreserved characters names the
- * same address. A value that is not a web address is escaped as text.
- */
-export function bareAddress(url: string): string {
-  if (!/^https?:\/\//.test(url)) return escapeMarkdown(url);
-  const destination = encodeDelimiters(url).replace(/[._~]+$/, (run) =>
-    run.replace(/./g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`),
-  );
-  return escapeMarkdown(destination);
-}

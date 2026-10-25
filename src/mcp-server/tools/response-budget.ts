@@ -5,6 +5,8 @@
  * @module mcp-server/tools/response-budget
  */
 
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+
 /**
  * UTF-8 byte cap on each response surface: the serialized `structuredContent`, and all
  * `content[]` text including the enrichment trailer.
@@ -54,7 +56,10 @@ export function pageOverheadBytes(
   text: string,
   enrichment: Readonly<Record<string, string>>,
 ): number {
-  const trailer = Object.values(enrichment).reduce((sum, value) => sum + utf8Bytes(value) + 9, 2);
+  const trailer = Object.values(enrichment).reduce(
+    (sum, value) => sum + utf8Bytes(escapeMarkdownInline(value)) + 9,
+    2,
+  );
   return Math.max(
     utf8Bytes(JSON.stringify({ ...skeleton, ...enrichment })),
     utf8Bytes(text) + trailer,

@@ -181,7 +181,7 @@ describe('cpsc_get_recent', () => {
         'CPSC source fields:',
         'Hazard: Fire hazard  |  Remedy: Refund',
         'Products: ACME Widget',
-        '[CPSC page](https://www.cpsc.gov/Recalls/2025/acme-widget)',
+        '[CPSC page](<https://www.cpsc.gov/Recalls/2025/acme-widget>)',
         '---',
         `Source: ${result.source_note}`,
         'CPSC jurisdiction: CPSC covers consumer products.',
@@ -242,7 +242,7 @@ describe('cpsc_get_recent', () => {
   });
 
   describe('Markdown escaping in content[]', () => {
-    it('escapes interpolated text and encodes spaces in the link, leaving structuredContent unchanged', async () => {
+    it('escapes interpolated text and preserves spaces in the link, leaving structuredContent unchanged', async () => {
       const url = 'https://www.cpsc.gov/Recalls/2024/Best-Buy-Recalls-Insignia-Air Fryers';
       mockGetRecent.mockResolvedValueOnce([
         makeRaw({
@@ -273,7 +273,7 @@ describe('cpsc_get_recent', () => {
       expect(text).toContain('Hazard: \\- Burn\\_ hazard  |  Remedy: Refund');
       expect(text).toContain('Products: Fryer \\`Pro\\`');
       expect(text).toContain(
-        '[CPSC page](https://www.cpsc.gov/Recalls/2024/Best-Buy-Recalls-Insignia-Air%20Fryers)',
+        '[CPSC page](<https://www.cpsc.gov/Recalls/2024/Best-Buy-Recalls-Insignia-Air Fryers>)',
       );
     });
   });

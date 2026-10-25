@@ -6,11 +6,8 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import {
-  bareAddress,
-  linkDestination,
-  escapeMarkdown as md,
-} from '@/mcp-server/tools/markdown-escape.js';
+import { markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
   budgetCutNotice,
   countWithinBudget,
@@ -275,12 +272,12 @@ function renderRecallBlock(r: SearchRecall): string {
   }
 
   if (r.images.length > 0) {
-    const imgList = r.images.map((img) => `${md(img.caption)}: ${bareAddress(img.url)}`).join('; ');
+    const imgList = r.images.map((img) => markdownImage(img.caption, img.url)).join('; ');
     lines.push(`**Images (${r.images.length}):** ${imgList}`);
   } else {
     lines.push(`**Images:** None`);
   }
-  lines.push(`[View recall](${linkDestination(r.cpsc_url)})`);
+  lines.push(markdownLink('View recall', r.cpsc_url));
   if (r.data_quality_notes.length > 0) {
     lines.push(`**Data quality (server-assessed):** ${r.data_quality_notes.join(' ')}`);
   }

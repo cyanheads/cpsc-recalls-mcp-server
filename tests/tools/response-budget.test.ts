@@ -55,6 +55,12 @@ describe('response budget', () => {
   });
 
   describe('pageOverheadBytes', () => {
+    it('reserves Markdown escapes in the framework enrichment trailer', () => {
+      expect(pageOverheadBytes({}, 't'.repeat(900), { effectiveQuery: '*'.repeat(500) })).toBe(
+        1911,
+      );
+    });
+
     it('reserves the JSON skeleton with its enrichment when that is the larger surface', () => {
       const skeleton = { recalls: [], note: 'n'.repeat(500) };
       const enrichment = { notice: 'Cut short.' };

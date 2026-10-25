@@ -376,17 +376,19 @@ describe('cpsc_get_recall', () => {
       expect(text).toContain('> - Model_X \\*Pro\\* — About 5,000');
       expect(text).toContain('> - Stoopher & Boots \\<Main>');
       expect(text).toContain('## Manufactured By\n- ACME \\[US\\]');
-      expect(text).toContain('- https://example.com/a_b*.png\n> EMABF\\*WS\\* & LMABF\\*WS\\*');
+      expect(text).toContain(
+        '- ![EMABF\\*WS\\* & LMABF\\*WS\\*](<https://example.com/a_b*.png>)\n> EMABF\\*WS\\* & LMABF\\*WS\\*',
+      );
     });
 
-    it('encodes spaces in the recall page link and leaves structuredContent unchanged', async () => {
+    it('preserves spaces in the recall page link and leaves structuredContent unchanged', async () => {
       const url = 'https://www.cpsc.gov/Recalls/2024/Torquay eTrading Recalls';
       mockGetByNumber.mockResolvedValueOnce(makeRaw({ URL: url }));
       const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });
 
       expect(result.structuredContent).toMatchObject({ cpsc_url: url });
       expect(wireText(result)).toContain(
-        '[View official CPSC recall page](https://www.cpsc.gov/Recalls/2024/Torquay%20eTrading%20Recalls)',
+        '[View official CPSC recall page](<https://www.cpsc.gov/Recalls/2024/Torquay eTrading Recalls>)',
       );
     });
 
@@ -396,20 +398,20 @@ describe('cpsc_get_recall', () => {
       expect(text).toContain('> Line one\n> \\- Line two\n> \\# Three\n');
     });
 
-    it('renders image and coordinated recall addresses without spaces exactly as before', async () => {
+    it('renders images and coordinated recall links without spaces', async () => {
       mockGetByNumber.mockResolvedValueOnce(makeRaw());
       const text = wireText(await runToolContract(cpscGetRecall, { recall_number: '25043' }));
 
       expect(text).toContain(
-        '## Images (1) — captions are CPSC source text\n- https://example.com/img.jpg\n> Product photo\n',
+        '## Images (1) — captions are CPSC source text\n- ![Product photo](<https://example.com/img.jpg>)\n> Product photo\n',
       );
       expect(text).toContain(
-        '## Coordinated Recalls\n- https://healthcanada.gc.ca/recalls/2025/123\n',
+        '## Coordinated Recalls\n- [https://healthcanada.gc.ca/recalls/2025/123](<https://healthcanada.gc.ca/recalls/2025/123>)\n',
       );
     });
 
     /** Record 24136's image addresses hold spaces; a GFM autolink would end at the first one. */
-    it('encodes spaces in image and coordinated recall addresses, and leaves structuredContent unchanged', async () => {
+    it('preserves spaces in image and coordinated recall addresses, and leaves structuredContent unchanged', async () => {
       const image = 'https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png';
       const coordinated = 'https://recalls-rappels.canada.ca/en/alert-recall/cannondale dave';
       mockGetByNumber.mockResolvedValueOnce(
@@ -426,15 +428,15 @@ describe('cpsc_get_recall', () => {
         coordinated_recalls: [coordinated],
       });
       expect(text).toContain(
-        '- https://www.cpsc.gov/s3fs-public/Recalled%20Cannondale%2026”%20Dave%20bicycle.png\n> Recalled Cannondale 26" Dave bicycle',
+        '- ![Recalled Cannondale 26" Dave bicycle](<https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png>)\n> Recalled Cannondale 26" Dave bicycle',
       );
       expect(text).toContain(
-        '- https://recalls-rappels.canada.ca/en/alert-recall/cannondale%20dave\n',
+        '- [https://recalls-rappels.canada.ca/en/alert-recall/cannondale dave](<https://recalls-rappels.canada.ca/en/alert-recall/cannondale dave>)\n',
       );
     });
 
     /** Record 26799's image address ends in "."; GFM leaves trailing punctuation out of an autolink. */
-    it('encodes trailing punctuation in an image address so the autolink covers all of it', async () => {
+    it('preserves trailing punctuation in the image destination', async () => {
       const image = 'https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i.';
       mockGetByNumber.mockResolvedValueOnce(
         makeRaw({ Images: [{ URL: image, Caption: 'Label' }] }),
@@ -443,7 +445,7 @@ describe('cpsc_get_recall', () => {
 
       expect(result.structuredContent).toMatchObject({ images: [{ url: image }] });
       expect(wireText(result)).toContain(
-        '- https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i%2E\n> Label',
+        '- ![Label](<https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i.>)\n> Label',
       );
     });
 
@@ -467,6 +469,23 @@ describe('cpsc_get_recall', () => {
    * reason plus recovery hint on failure.
    */
   describe('wire contract', () => {
+    it('settles as cancelled when the upstream resolves after the caller aborts', async () => {
+      const controller = new AbortController();
+      mockGetByNumber.mockImplementationOnce(async () => {
+        controller.abort();
+        return makeRaw();
+      });
+      const result = await runToolContract(
+        cpscGetRecall,
+        { recall_number: '25043' },
+        { context: { signal: controller.signal } },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({ error: { code: -32011 } });
+      expect(result.structuredContent).not.toHaveProperty('recall_number');
+    });
+
     it('carries the record on structuredContent and in the text channel', async () => {
       mockGetByNumber.mockResolvedValueOnce(makeRaw());
       const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });

@@ -4,11 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  bareAddress,
-  escapeMarkdown,
-  linkDestination,
-} from '@/mcp-server/tools/markdown-escape.js';
+import { escapeMarkdown } from '@/mcp-server/tools/markdown-escape.js';
 import { timeAcrossSizes } from '../linear-time.js';
 
 describe('escapeMarkdown', () => {
@@ -123,60 +119,4 @@ describe('escapeMarkdown', () => {
       expect(ms80k).toBeLessThan(50);
     });
   }
-});
-
-describe('linkDestination', () => {
-  it('percent-encodes whitespace, angle brackets, and parentheses as UTF-8', () => {
-    expect(
-      linkDestination('https://www.cpsc.gov/Recalls/2024/Amer Sports Winter & Outdoor Recalls'),
-    ).toBe('https://www.cpsc.gov/Recalls/2024/Amer%20Sports%20Winter%20&%20Outdoor%20Recalls');
-    expect(linkDestination('https://x.gov/a\u00a0b(c)<d>')).toBe(
-      'https://x.gov/a%C2%A0b%28c%29%3Cd%3E',
-    );
-  });
-
-  /** A link destination reads backslash escapes and references, which would change the address. */
-  it('backslash-escapes a backslash and an "&" that opens a character reference', () => {
-    expect(linkDestination('https://x.gov/Kids&amp;Co\\Toys&#38;x&y')).toBe(
-      'https://x.gov/Kids\\&amp;Co\\\\Toys\\&#38;x&y',
-    );
-  });
-
-  it('returns an address with nothing to encode unchanged, existing escapes included', () => {
-    const url = 'https://www.cpsc.gov/Recalls/2025/Acme-Recalls-Widgets?lang=eng&rn=25043%20';
-    expect(linkDestination(url)).toBe(url);
-  });
-});
-
-describe('bareAddress', () => {
-  it('encodes a web address so it stays one address, and leaves one with nothing to encode as it is', () => {
-    expect(bareAddress('https://www.cpsc.gov/s3fs-public/Neon Nitro 8 (top view)_0.png')).toBe(
-      'https://www.cpsc.gov/s3fs-public/Neon%20Nitro%208%20%28top%20view%29_0.png',
-    );
-    expect(bareAddress('https://example.com/a_b*.png')).toBe('https://example.com/a_b*.png');
-  });
-
-  /** A GFM autolink shows a backslash literally, so the escapes a link destination needs stay out. */
-  it('leaves a backslash and a character reference in an autolinked address unescaped', () => {
-    expect(bareAddress('https://x.gov/Kids&amp;Co\\Toys.png')).toBe(
-      'https://x.gov/Kids&amp;Co\\Toys.png',
-    );
-  });
-
-  /** GFM leaves trailing punctuation out of an autolink; records 26799 and 26793 end so. */
-  it('percent-encodes a trailing ".", "_", or "~" so a GFM autolink keeps it', () => {
-    expect(bareAddress('https://cpsc.gov/s3fs-public/ABC3.png?VersionId=Yz4.7.f1i.')).toBe(
-      'https://cpsc.gov/s3fs-public/ABC3.png?VersionId=Yz4.7.f1i%2E',
-    );
-    expect(bareAddress('https://cpsc.gov/Xinan3.png?VersionId=Q8_Kwu_')).toBe(
-      'https://cpsc.gov/Xinan3.png?VersionId=Q8_Kwu%5F',
-    );
-    expect(bareAddress('https://x.gov/a~._')).toBe('https://x.gov/a%7E%2E%5F');
-  });
-
-  it('escapes a value that is not a web address as text, without percent-encoding it', () => {
-    expect(bareAddress('The recalled *mattresses* (queen)')).toBe(
-      'The recalled \\*mattresses\\* (queen)',
-    );
-  });
 });
