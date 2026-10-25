@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-10-08 11:18:32
+Generated on: 2026-10-25 09:32:39
 
 ```text
 cpsc-recalls-mcp-server/
@@ -167,6 +167,7 @@ cpsc-recalls-mcp-server/
 │   │   ├── cpsc-get-recent.tool.test.ts
 │   │   ├── cpsc-search-recalls.tool.test.ts
 │   │   ├── markdown-escape.test.ts
+│   │   ├── markdown-rendering.test.ts
 │   │   └── response-budget.test.ts
 │   └── linear-time.ts
 ├── .dockerignore

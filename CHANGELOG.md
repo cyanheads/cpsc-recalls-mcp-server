@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-10-25
+
+Recall links and product images use framework Markdown helpers, with escaped enrichment included in page budgets; mcp-ts-core moves to 0.13.16.
+
 ## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-10-08
 
 Moves to mcp-ts-core ^0.13.14: integers sent for string fields, numeric strings, and null optional arguments are repaired before validation, tool errors carry their request ID, and the Docker image installs dependencies without emulating the target architecture.
