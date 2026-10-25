@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## Overview
 
-Consumer product recalls from the CPSC [saferproducts.gov](https://www.saferproducts.gov/) database — toys, electronics, furniture, appliances, children's products, tools, and clothing. Search recalls by product, brand, retailer, or hazard, fetch full detail for a specific recall number, or pull a recent-recalls feed for a date window. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Consumer product recalls from the CPSC [saferproducts.gov](https://www.saferproducts.gov/) database — toys, electronics, furniture, appliances, children's products, tools, and clothing. Search recalls by product, brand, retailer, or hazard, fetch full detail for a specific recall number, or pull a recent-recalls feed for a date window.
 
 ### Tools
 
@@ -78,7 +78,7 @@ CPSC-specific:
 Agent-friendly output:
 
 - Provenance on every response — `source_note`, `cpsc_url`, and `(CPSC source text)` blockquote labels distinguish relayed CPSC narrative from the server's own guidance
-- Plain text on both surfaces — the HTML markup and character codes CPSC stores in some records (`&amp;`, `<br>`, stray table tags) are converted to plain text before matching and output, and `content[]` escapes Markdown so model and serial numbers such as `1HFVE05**K4000003` keep every character; recall page, image, and coordinated-recall addresses that contain spaces are percent-encoded in `content[]` so each renders as one working link, while `structuredContent` carries them as CPSC stores them
+- Plain text on both surfaces — the HTML markup and character codes CPSC stores in some records (`&amp;`, `<br>`, stray table tags) are converted to plain text before matching and output, and `content[]` escapes Markdown so model and serial numbers such as `1HFVE05**K4000003` keep every character; recall pages and coordinated recalls render as links, and product images render inline with their captions; HTTP(S) addresses preserve CPSC’s URL values on both surfaces, while other schemes remain visible as text
 - Pagination discriminators — `total_found`, `offset`, `has_more`, and `truncated` on every search/recent response so agents can tell when results are clipped and page with `offset`; each surface of a page stays within a 64,000-byte budget, and a notice gives the next offset when the budget ends a page early
 - `data_quality_notes` on every response — gaps observed in the upstream record (missing hazard text, no product entries), derived from which fields CPSC left blank rather than any judgment call
 - Jurisdiction note (`cpsc_jurisdiction`) on every response — lets agents route callers to the correct agency (FDA, NHTSA, USCG, EPA, ATF) when a product is out of scope
@@ -87,18 +87,40 @@ Agent-friendly output:
 
 ### Public Hosted Instance
 
-A public instance is available at `https://cpsc-recalls.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+A public instance is available at `https://cpsc-recalls.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own configuration shape.
+
+For Claude Code:
+
+```sh
+claude mcp add --transport http cpsc-recalls-mcp-server https://cpsc-recalls.caseyjhand.com/mcp
+```
+
+For Cline (`cline_mcp_settings.json`):
 
 ```json
 {
   "mcpServers": {
     "cpsc-recalls-mcp-server": {
-      "type": "streamable-http",
+      "type": "streamableHttp",
       "url": "https://cpsc-recalls.caseyjhand.com/mcp"
     }
   }
 }
 ```
+
+For Cursor (`mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "cpsc-recalls-mcp-server": {
+      "url": "https://cpsc-recalls.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+Claude Desktop adds remote servers under Settings → Connectors.
 
 ### Self-Hosted / Local
 
