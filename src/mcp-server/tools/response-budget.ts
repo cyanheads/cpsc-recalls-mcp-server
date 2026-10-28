@@ -5,8 +5,6 @@
  * @module mcp-server/tools/response-budget
  */
 
-import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
-
 /**
  * UTF-8 byte cap on each response surface: the serialized `structuredContent`, and all
  * `content[]` text including the enrichment trailer.
@@ -42,23 +40,62 @@ export function countWithinBudget<T>(
   return count;
 }
 
+/** Length of the longest backtick run in `value`; 0 when it holds none. */
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  for (const [run] of value.matchAll(/`+/g)) longest = Math.max(longest, run.length);
+  return longest;
+}
+
+/**
+ * Upper bound on the bytes the framework renders for `value` as a code literal: nothing
+ * for the empty string; for one line, a code span delimited by a backtick run one longer
+ * than the value's longest, plus a padding space on each side; for a value holding a line
+ * break, a fenced block on lines of its own — a line break before and after, and a fence
+ * at least three backticks long (one longer than the value's longest run) on each side of
+ * the value's own line.
+ */
+function codeLiteralBytes(value: string): number {
+  if (value === '') return 0;
+  const run = longestBacktickRun(value);
+  return /[\r\n]/.test(value)
+    ? utf8Bytes(value) + 2 * Math.max(3, run + 1) + 4
+    : utf8Bytes(value) + 2 * (run + 1) + 2;
+}
+
+/**
+ * Upper bound on the bytes the framework's enrichment trailer renders for one field,
+ * separator included: the larger of its renderings as a `notice` (every line behind `> `)
+ * and as an `echo` (`Query: `) or generic (`**key:** `) line carrying the value as a code
+ * literal, plus the two-byte line break or blank line set before it.
+ */
+function trailerFieldBytes(key: string, value: string): number {
+  const lines = 1 + (value.match(/\r\n|\r|\n/g)?.length ?? 0);
+  const label = Math.max(utf8Bytes('Query: '), utf8Bytes(`**${key}:** `));
+  return 2 + Math.max(utf8Bytes(value) + 2 * lines, label + codeLiteralBytes(value));
+}
+
 /**
  * Bytes a page spends outside its records: the larger of the `structuredContent` skeleton
  * (records emptied, enrichment merged in) and the rendered non-record text plus the
  * enrichment trailer the framework appends to `content[]`.
  *
- * The trailer is a leading blank line, then each field behind a label of at most seven
- * bytes (`Query: `, `> `), separated from the next by at most a blank line — so each field
- * is reserved nine bytes beyond its value.
+ * The trailer is its own text block: a leading blank line, then one field per enrichment
+ * value. A `notice` renders every line behind `> `; an `echo` renders `Query: ` and a
+ * generic field `**key:** ` before the value as a code literal — a code span, sized past
+ * the value's longest backtick run, or a fenced block on lines of its own when the value
+ * holds a line break, and nothing when it is empty. Fields after a quote are set off by a
+ * blank line, the rest by a line break. Each field is reserved its largest rendering, so
+ * the reservation holds whichever helper set it and whatever the value holds.
  */
 export function pageOverheadBytes(
   skeleton: object,
   text: string,
   enrichment: Readonly<Record<string, string>>,
 ): number {
-  const trailer = Object.values(enrichment).reduce(
-    (sum, value) => sum + utf8Bytes(escapeMarkdownInline(value)) + 9,
-    2,
+  const trailer = Object.entries(enrichment).reduce(
+    (sum, [key, value]) => sum + trailerFieldBytes(key, value),
+    0,
   );
   return Math.max(
     utf8Bytes(JSON.stringify({ ...skeleton, ...enrichment })),

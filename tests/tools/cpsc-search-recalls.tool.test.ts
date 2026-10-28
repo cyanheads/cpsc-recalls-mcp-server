@@ -6,6 +6,7 @@
 import { type HandlerContext, type ReasonOf, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import MarkdownIt from 'markdown-it';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscSearchRecalls } from '@/mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
 
@@ -100,6 +101,22 @@ const formatText = (result: Parameters<NonNullable<typeof cpscSearchRecalls.form
 /** The text channel of a full wire result. */
 const wireText = (result: { content?: ReadonlyArray<{ type: string; text?: string }> }): string =>
   textOf(result.content ?? []);
+
+const commonmark = new MarkdownIt('commonmark');
+
+/**
+ * The query the enrichment trailer echoes, read back through a CommonMark parse: the code
+ * span of the paragraph that opens with `Query: `. Undefined when no such line renders.
+ */
+const echoedQuery = (text: string): string | undefined => {
+  for (const block of commonmark.parse(text, {})) {
+    const [label, code] = block.children ?? [];
+    if (label?.type === 'text' && label.content === 'Query: ' && code?.type === 'code_inline') {
+      return code.content;
+    }
+  }
+  return;
+};
 
 describe('cpsc_search_recalls', () => {
   let ctx: SearchRecallsContext;
@@ -1538,6 +1555,33 @@ describe('cpsc_search_recalls', () => {
     });
 
     /**
+     * The trailer renders the query echo as a code span delimited by a backtick run one
+     * longer than the value's longest, so a 500-backtick distributor (a field the record
+     * blocks never render) costs about 1,000 bytes beyond the value. Asterisk hazards render
+     * escaped, so `content[]` is the surface the budget binds on; each hazard size moves
+     * where the cut lands, and across the sweep some page ends with less room than that.
+     */
+    it('leaves room for a backtick-heavy query echo at every cut point', async () => {
+      const ticks = '`'.repeat(500);
+      for (let size = 200; size < 220; size++) {
+        mockSearch.mockResolvedValueOnce(
+          heavyRaws(120, size, '*').map((raw) => ({
+            ...raw,
+            Distributors: [{ Name: ticks, CompanyID: '' }],
+          })),
+        );
+        const result = await runToolContract(cpscSearchRecalls, { distributor: ticks, limit: 200 });
+        const sc = result.structuredContent as { recalls: unknown[] };
+        const text = wireText(result);
+
+        expect(sc.recalls.length, `hazard size ${size}`).toBeLessThan(120);
+        expect(echoedQuery(text), `hazard size ${size}`).toBe(`distributor="${ticks}"`);
+        expect(utf8(text), `hazard size ${size}`).toBeLessThanOrEqual(64_000);
+        expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
+      }
+    });
+
+    /**
      * The query echo is part of both surfaces. A control character JSON-escapes to six
      * bytes, and seven once structuredContent escapes it again, so nine 499-character
      * filters make an echo of about 16,000 bytes that the page must leave room for.
@@ -1698,7 +1742,7 @@ describe('cpsc_search_recalls', () => {
       const text = wireText(result);
       expect(text).toContain('Showing 0 of 1 recalls');
       expect(text).toContain('> Offset 50');
-      expect(text).toContain('Query: product_name="widget"');
+      expect(echoedQuery(text)).toBe('product_name="widget"');
     });
 
     it('returns zero matches as a success on both surfaces, with the query and notice', async () => {
@@ -1720,7 +1764,7 @@ describe('cpsc_search_recalls', () => {
           .parse(result.structuredContent),
       ).not.toThrow();
       const text = wireText(result);
-      expect(text).toContain('Query: title_search="xyzzyqqzz"');
+      expect(echoedQuery(text)).toBe('title_search="xyzzyqqzz"');
       expect(text).toContain('> No recalls matched');
     });
 
@@ -1742,7 +1786,7 @@ describe('cpsc_search_recalls', () => {
 
       expect(result.structuredContent).toMatchObject({ effectiveQuery: 'hazard_search="fire"' });
       expect(result.structuredContent).not.toHaveProperty('notice');
-      expect(wireText(result)).toContain('Query: hazard_search="fire"');
+      expect(echoedQuery(wireText(result))).toBe('hazard_search="fire"');
     });
 
     it('declares no no_results error', () => {

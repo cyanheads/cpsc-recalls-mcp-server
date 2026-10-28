@@ -3,6 +3,8 @@
  * @module tests/tools/response-budget.test
  */
 
+import { tool, z } from '@cyanheads/mcp-ts-core';
+import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it } from 'vitest';
 import {
   budgetCutNotice,
@@ -55,10 +57,62 @@ describe('response budget', () => {
   });
 
   describe('pageOverheadBytes', () => {
-    it('reserves Markdown escapes in the framework enrichment trailer', () => {
-      expect(pageOverheadBytes({}, 't'.repeat(900), { effectiveQuery: '*'.repeat(500) })).toBe(
-        1911,
-      );
+    /**
+     * Values the framework trailer renders at their largest: backtick runs that lengthen a
+     * code span's delimiters, line breaks that turn it into a fenced block and add `> `
+     * lines to a notice, edge spaces and backticks that add padding, and the empty string.
+     */
+    const hostile = [
+      '',
+      ' ',
+      '`',
+      '`'.repeat(500),
+      'a`b``c```d',
+      ` ${'`'.repeat(40)} `,
+      'distributor="````" AND remedy="``"',
+      'line one\nline two',
+      'a\r\nb\rc\n',
+      '\n\n\n\n',
+      `${'`'.repeat(300)}\n${'`'.repeat(2)}`,
+      '```\nfenced\n```',
+      `${'é'.repeat(200)}\`\`\``,
+      '> quoted\n- bullet\n1. item',
+    ];
+
+    /** Sets one value through the echo, notice, and generic trailer arms at once. */
+    const probe = tool('budget_probe', {
+      description: 'Echoes one value into every enrichment trailer arm.',
+      input: z.object({ value: z.string().describe('The value to enrich with.') }),
+      output: z.object({}).describe('Nothing; the value rides the enrichment.'),
+      enrichment: {
+        effectiveQuery: z.string().describe('The value, echoed as a query.'),
+        notice: z.string().describe('The value, as a notice.'),
+        note: z.string().describe('The value, as a generic field.'),
+      },
+      handler(input, ctx) {
+        ctx.enrich.echo(input.value);
+        ctx.enrich.notice(input.value);
+        ctx.enrich({ note: input.value });
+        return {};
+      },
+      format: () => [{ type: 'text', text: '' }],
+    });
+
+    it.each(hostile)('reserves the trailer the framework renders for %j', async (value) => {
+      const result = await runToolContract(probe, { value });
+      const blocks = result.content ?? [];
+      const trailer = blocks.at(-1);
+      expect(blocks).toHaveLength(2);
+      const rendered = Buffer.byteLength(trailer?.type === 'text' ? trailer.text : '', 'utf8');
+      expect(rendered).toBeGreaterThan(0);
+
+      // A long page text makes content[] the larger surface, so the overhead past it is the trailer reservation.
+      const pageText = 't'.repeat(100_000);
+      const reserved =
+        pageOverheadBytes({}, pageText, { effectiveQuery: value, notice: value, note: value }) -
+        pageText.length;
+
+      expect(reserved).toBeGreaterThanOrEqual(rendered);
     });
 
     it('reserves the JSON skeleton with its enrichment when that is the larger surface', () => {
@@ -74,9 +128,14 @@ describe('response budget', () => {
       const enrichment = { effectiveQuery: 'title_search="crib"', notice: 'Cut short.' };
       const overhead = pageOverheadBytes({ recalls: [] }, text, enrichment);
 
-      // The framework renders "\n\nQuery: …\n> …": 900 + 2 + 7 + 19 + 1 + 2 + 10 = 941 bytes.
-      expect(overhead).toBeGreaterThanOrEqual(941);
-      expect(overhead).toBeLessThanOrEqual(941 + 2 * 4);
+      // The framework renders "\n\nQuery: `…`\n> …": 900 + 2 + 7 + 21 + 1 + 2 + 10 = 943 bytes.
+      expect(overhead).toBeGreaterThanOrEqual(943);
+      /**
+       * Each field is reserved its largest rendering — the generic `**key:** ` line with a
+       * code span padded on both sides — plus a two-byte separator:
+       * 900 + (2 + 20 + 19 + 4) + (2 + 12 + 10 + 4) = 973 bytes.
+       */
+      expect(overhead).toBe(973);
     });
   });
 
