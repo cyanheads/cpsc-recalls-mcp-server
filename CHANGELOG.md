@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-10-28
+
+Publishes the cpsc-recalls-guide Agent Skill as an MCP resource; mcp-ts-core moves to 0.13.18, which renders the search query echo as a code span and stops the HTTP transport from retaining memory on every request.
+
 ## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-10-25
 
 Recall links and product images use framework Markdown helpers, with escaped enrichment included in page budgets; mcp-ts-core moves to 0.13.16.

@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-10-25 09:32:39
+Generated on: 2026-10-28 13:37:15
 
 ```text
 cpsc-recalls-mcp-server/
@@ -26,6 +26,7 @@ cpsc-recalls-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -38,6 +39,8 @@ cpsc-recalls-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -135,6 +138,9 @@ cpsc-recalls-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── cpsc-recalls-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── mcp-server/
 │   │   ├── prompts/
@@ -157,6 +163,8 @@ cpsc-recalls-mcp-server/
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
+│   ├── scripts/
+│   │   └── packaging-agent-docs.test.ts
 │   ├── services/
 │   │   └── cpsc-recall/
 │   │       ├── cpsc-recall-service.test.ts
@@ -186,7 +194,9 @@ cpsc-recalls-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json
