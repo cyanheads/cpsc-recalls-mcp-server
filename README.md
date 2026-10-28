@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/cpsc-recalls-mcp-server</h1>
   <p><b>Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.</b>
-  <div>3 Tools</div>
+  <div>3 Tools • 1 Skill</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/cpsc-recalls-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/cpsc-recalls-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/cpsc-recalls-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -39,6 +39,12 @@ Consumer product recalls from the CPSC [saferproducts.gov](https://www.saferprod
 | `cpsc_get_recall` | Full detail for a single recall by recall number — hazards, remedy, products, injuries, images, and the official CPSC page |
 | `cpsc_get_recent` | Fetch the most recent recalls ordered newest-first, scoped to a configurable date window |
 
+### Skills
+
+| Skill | Description |
+|:---|:---|
+| `cpsc-recalls-guide` | Find and confirm US consumer product recalls with the `cpsc_*` tools — search formulation, recall-number quirks, and when an empty result proves nothing |
+
 CPSC jurisdiction is consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are not in this database; every response carries a jurisdiction note.
 
 ## Capability reference
@@ -64,6 +70,13 @@ CPSC jurisdiction is consumer products only — food/drugs (FDA), motor vehicles
 - `days` look-back window (1–365, default 30) anchored to today; `limit` (1–100, default 20) and `offset` page through `total_found`, since narrowing `days` drops the oldest recalls rather than paging. Older recalls are reachable through `cpsc_search_recalls` date bounds
 - Returns a lightweight record per recall — number, date, title, hazards, remedy types, product names, `cpsc_url`, `data_quality_notes` — for `cpsc_get_recall` to expand; `has_more` is the paging signal, and an empty window, an offset past the end, or a budget-cut page carries a notice. Failures: `upstream_rejected` (not retryable), `upstream_error` (retryable)
 
+---
+
+### `cpsc-recalls-guide` <sub>skill</sub>
+
+- Helps an agent check whether a specific product, model, serial, or UPC was recalled, sweep a brand's or retailer's recall history, monitor new or republished recalls for a hazard, and decide whether a product is CPSC's at all
+- Served over MCP as the resource `skill://cpsc-recalls-guide/SKILL.md` under the template `skill://{+path}`; also ships in `skills/` for plugin installs and the `.mcpb` bundle
+
 ## Features
 
 Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
@@ -85,133 +98,32 @@ Agent-friendly output:
 
 ## Getting started
 
-### Public Hosted Instance
-
-A public instance is available at `https://cpsc-recalls.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own configuration shape.
-
-For Claude Code:
+Connect to the hosted instance (Streamable HTTP, stateless), no install:
 
 ```sh
 claude mcp add --transport http cpsc-recalls-mcp-server https://cpsc-recalls.caseyjhand.com/mcp
 ```
 
-For Cline (`cline_mcp_settings.json`):
+Or run it locally:
 
-```json
-{
-  "mcpServers": {
-    "cpsc-recalls-mcp-server": {
-      "type": "streamableHttp",
-      "url": "https://cpsc-recalls.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add cpsc-recalls-mcp-server -- npx -y @cyanheads/cpsc-recalls-mcp-server
 ```
 
-For Cursor (`mcp.json`):
+For other clients, add this to the MCP config file:
 
 ```json
 {
   "mcpServers": {
     "cpsc-recalls-mcp-server": {
-      "url": "https://cpsc-recalls.caseyjhand.com/mcp"
-    }
-  }
-}
-```
-
-Claude Desktop adds remote servers under Settings → Connectors.
-
-### Self-Hosted / Local
-
-Add the following to your MCP client configuration file.
-
-```json
-{
-  "mcpServers": {
-    "cpsc-recalls-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/cpsc-recalls-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
-
-Or with npx (no Bun required):
-
-```json
-{
-  "mcpServers": {
-    "cpsc-recalls-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/cpsc-recalls-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
+      "args": ["-y", "@cyanheads/cpsc-recalls-mcp-server"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "cpsc-recalls-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/cpsc-recalls-mcp-server:latest"]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- No API key required — the CPSC public recalls API is freely accessible.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/cpsc-recalls-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd cpsc-recalls-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Configure environment:**
-
-```sh
-cp .env.example .env
-# edit .env if needed — no required API keys
-```
+No API key is required — the CPSC public recalls API is freely accessible. For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -238,6 +150,16 @@ No server-specific API keys are required. See [`.env.example`](./.env.example) f
 
 ### Local development
 
+Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+). No API key is needed.
+
+- **Clone and install:**
+
+  ```sh
+  git clone https://github.com/cyanheads/cpsc-recalls-mcp-server.git
+  cd cpsc-recalls-mcp-server && bun install
+  cp .env.example .env   # optional — no required API keys
+  ```
+
 - **Build and run the production version:**
 
   ```sh
@@ -248,6 +170,12 @@ No server-specific API keys are required. See [`.env.example`](./.env.example) f
   bun run start:stdio
   # or
   bun run start:http
+  ```
+
+  For Streamable HTTP, set the transport and port; the server listens at `http://localhost:3010/mcp`:
+
+  ```sh
+  MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
   ```
 
 - **Run checks and tests:**
@@ -264,13 +192,16 @@ docker build -t cpsc-recalls-mcp-server .
 docker run --rm -p 3010:3010 cpsc-recalls-mcp-server
 ```
 
+To run the published image over stdio from an MCP client, use `"command": "docker"` with `"args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/cpsc-recalls-mcp-server:latest"]`.
+
 The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/cpsc-recalls-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
 
 ## Project structure
 
 | Directory | Purpose |
 |:---|:---|
-| `src/index.ts` | `createApp()` entry point — registers tools and inits the CPSC service |
+| `src/index.ts` | `createApp()` entry point — registers tools, serves the published skill from `skills/`, and inits the CPSC service |
+| `skills/` | `cpsc-recalls-guide/SKILL.md`, the published agent skill |
 | `src/mcp-server/tools` | Tool definitions (`definitions/*.tool.ts`) — search, get-recall, get-recent — plus `response-budget.ts`, the page size budget the two list tools share, and `markdown-escape.ts`, the escaping applied to CPSC text in `content[]` |
 | `src/services/cpsc-recall` | CPSC recall service — API client, types, and `normalize-text.ts`, which converts CPSC's HTML markup and character codes to plain text |
 

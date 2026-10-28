@@ -14,7 +14,13 @@ This records the design as reasoned before the build, kept for its rationale. Wh
 
 ### Resources
 
-None. All data is reachable via the tool surface. The search/get pattern doesn't benefit from injectable resource URIs — a tool-only agent can accomplish everything this server is for.
+None defined. All data is reachable via the tool surface. The search/get pattern doesn't benefit from injectable resource URIs — a tool-only agent can accomplish everything this server is for.
+
+**Superseded in part:** the one resource is the published skill below, served as `skill://cpsc-recalls-guide/SKILL.md`.
+
+### Skills
+
+One published skill, `cpsc-recalls-guide` (`skills/cpsc-recalls-guide/SKILL.md`), served over MCP through `createApp({ skills: 'skills' })`. It exists because search-formulation gates and identifier quirks (one empty search is not "not recalled", substring matching, lettered recall numbers, model and UPC matching by description text, issue date versus last-published date) are too long and too cross-tool for tool descriptions, and an agent that skips them draws wrong conclusions from empty or partial results.
 
 ### Prompts
 
