@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "cpsc-recalls-mcp-server",
+  "version": "0.2.3",
+  "description": "Search and retrieve US consumer product recalls from the CPSC (Consumer Product Safety Commission) via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/cpsc-recalls-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/cpsc-recalls-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "cpsc",
+    "consumer-product-safety",
+    "recalls",
+    "product-safety",
+    "hazards",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ]
+}
