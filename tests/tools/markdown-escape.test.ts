@@ -5,7 +5,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { escapeMarkdown } from '@/mcp-server/tools/markdown-escape.js';
-import { timeAcrossSizes } from '../linear-time.js';
 
 describe('escapeMarkdown', () => {
   it('escapes emphasis, code, link, and strikethrough characters and backslashes anywhere', () => {
@@ -50,12 +49,82 @@ describe('escapeMarkdown', () => {
     expect(escapeMarkdown('1234567890. ten digits')).toBe('1234567890. ten digits');
   });
 
-  it('leaves web addresses as they are, so a GFM autolink shows no backslash', () => {
+  it('leaves an address GFM autolinks as it is when it holds nothing to escape', () => {
+    const text =
+      'see https://x.com/a/b?c=1#d, www.x.com/page. and (www.x.com/(e)) or www.x.com/a<5';
+    expect(escapeMarkdown(text)).toBe(text);
+  });
+
+  /**
+   * A backslash inside a GFM autolink shows literally, so an address GFM links that holds a
+   * character to escape becomes an explicit link over the span GFM links, with the
+   * characters GFM leaves out of the link escaped after it as text.
+   */
+  it('renders an address GFM autolinks as an explicit link when it holds a character to escape', () => {
+    expect(escapeMarkdown('www.example.com/a*b*')).toBe(
+      '[www.example.com/a\\*b](<http://www.example.com/a*b>)\\*',
+    );
     expect(
       escapeMarkdown('see https://www.cpsc.gov/a_b*c?_x=1 or www.amazon.com/s?ref_=x_ now_'),
-    ).toBe('see https://www.cpsc.gov/a_b*c?_x=1 or www.amazon.com/s?ref_=x_ now\\_');
+    ).toBe(
+      'see [https://www.cpsc.gov/a_b\\*c?\\_x=1](<https://www.cpsc.gov/a_b*c?_x=1>) or [www.amazon.com/s?ref\\_=x](<http://www.amazon.com/s?ref_=x>)\\_ now\\_',
+    );
     expect(escapeMarkdown('(www.x.com/a*b*) "https://a_b.x.com/c*d*"')).toBe(
-      '(www.x.com/a*b*) "https://a_b.x.com/c*d*"',
+      '([www.x.com/a\\*b](<http://www.x.com/a*b>)\\*) "[https://a_b.x.com/c\\*d](<https://a_b.x.com/c*d>)\\*"',
+    );
+    expect(escapeMarkdown('see www.example.com/?a=1&amp;b=2 now')).toBe(
+      'see [www.example.com/?a=1\\&amp;b=2](<http://www.example.com/?a=1\\&amp;b=2>) now',
+    );
+  });
+
+  it('links the address before an escaped "<" over GFM\'s span, so no backslash joins the link', () => {
+    expect(escapeMarkdown('see www.example.com/a<b now')).toBe(
+      'see [www.example.com/a](<http://www.example.com/a>)\\<b now',
+    );
+    expect(escapeMarkdown('https://x.com/a.<br>')).toBe(
+      '[https://x.com/a](<https://x.com/a>).\\<br>',
+    );
+  });
+
+  /** Where cmark-gfm's `autolink_delim` ends the link, as GitHub renders it. */
+  it('ends the link where GFM ends the autolink and escapes the rest as text', () => {
+    expect(escapeMarkdown('https://x.com/a*?!.,:_~"\' x')).toBe(
+      '[https://x.com/a](<https://x.com/a>)\\*?!.,:\\_\\~"\' x',
+    );
+    expect(escapeMarkdown('https://x.com/a*b(c)) x')).toBe(
+      '[https://x.com/a\\*b(c)](<https://x.com/a*b(c)>)) x',
+    );
+    expect(escapeMarkdown('https://x.com/a*)(b) x')).toBe(
+      '[https://x.com/a\\*)(b](<https://x.com/a*)(b>)) x',
+    );
+    expect(escapeMarkdown('https://x.com/a*&amp;&copy;. x')).toBe(
+      '[https://x.com/a](<https://x.com/a>)\\*\\&amp;\\&copy;. x',
+    );
+    expect(escapeMarkdown('https://x.com/a*&a1; x')).toBe(
+      '[https://x.com/a\\*&a1](<https://x.com/a*&a1>); x',
+    );
+    expect(escapeMarkdown('https://x.com/a*] x')).toBe(
+      '[https://x.com/a\\*\\]](<https://x.com/a*]>) x',
+    );
+  });
+
+  /** GFM links a scheme after anything but an ASCII letter, and `![…](…)` is an image. */
+  it('links a scheme address after a digit, a non-ASCII letter, or "!" as text reads it', () => {
+    expect(escapeMarkdown('1https://x.com/a*b and éhttps://x.com/c_ x')).toBe(
+      '1[https://x.com/a\\*b](<https://x.com/a*b>) and é[https://x.com/c](<https://x.com/c>)\\_ x',
+    );
+    expect(escapeMarkdown('see!https://x.com/a*b*')).toBe(
+      'see\\![https://x.com/a\\*b](<https://x.com/a*b>)\\*',
+    );
+    expect(escapeMarkdown('see!https://x.com/ab and xhttps://x.com/a*b')).toBe(
+      'see!https://x.com/ab and xhttps://x.com/a\\*b',
+    );
+  });
+
+  /** `markdownLink` would show such an address twice, as `label (url)`. */
+  it('escapes an address as text when its link target is not a parseable web URL', () => {
+    expect(escapeMarkdown('see https://x.com:99999/a*b* now')).toBe(
+      'see https://x.com:99999/a\\*b\\* now',
     );
   });
 
@@ -97,8 +166,9 @@ describe('escapeMarkdown', () => {
   });
 
   /**
-   * Adversarial shapes from the issue: each must scale linearly. Quadratic work would take
-   * 256× the time for 16× the input; the bound allows 64×.
+   * Adversarial shapes: each must scale linearly. From 5,000 to 320,000 characters linear
+   * work grows 64× and quadratic 4,096×; the full-span bound allows 256×, and the per-size
+   * bound stops a quadratic pass before it reaches the largest input.
    */
   const adversarial: Record<string, (n: number) => string> = {
     'long runs of "*"': (n) => '*'.repeat(n),
@@ -111,12 +181,62 @@ describe('escapeMarkdown', () => {
     '"<" and a letter, with no ">"': (n) => '<a'.repeat(n / 2),
     '"&" and a long alphanumeric run, with no ";"': (n) => `&${'a'.repeat(n - 1)}`,
     'one long web address': (n) => `https://${'a_'.repeat(n / 2 - 4)}`,
+    'an address holding "*" followed by a long ")" run': (n) =>
+      `https://x.com/a*${')'.repeat(n - 16)}`,
+    'an address holding "*" followed by a long "&a;" run': (n) =>
+      `https://x.com/a*${'&a;'.repeat((n - 16) / 3)}`,
+    'an address holding "*" followed by a long "(" run': (n) =>
+      `https://x.com/a*${'('.repeat(n - 16)}`,
+    'an address holding "*" followed by a long ";" run': (n) =>
+      `https://x.com/a*${';'.repeat(n - 16)}`,
+    'an address holding "*" ending in a long letter run and ";"': (n) =>
+      `https://x.com/a*${'a'.repeat(n - 17)};`,
+    'many addresses rendered as links': (n) => 'www.x.com/a*b* '.repeat(n / 15),
+    'many addresses after "!" before an escaped "<"': (n) => '!https://x.com/a<b '.repeat(n / 20),
+    'one long line of addresses ending in a line break': (n) =>
+      `${'https://x.com/a* '.repeat((n - 2) / 17)}\ny`,
+    'line breaks through the whole input': (n) => '  \r\n'.repeat(n / 4),
   };
   for (const [shape, make] of Object.entries(adversarial)) {
     it(`runs in linear time on ${shape}`, () => {
-      const { ms80k, ratio } = timeAcrossSizes(make, escapeMarkdown);
-      expect(ratio).toBeLessThan(64);
-      expect(ms80k).toBeLessThan(50);
+      expect(timeDoubling(make, escapeMarkdown)).toBeLessThan(256);
     });
   }
 });
+
+/** Thread CPU each measurement runs for, so a coarse CPU clock tick never reads as zero. */
+const SAMPLE_MS = 8;
+
+/**
+ * Per-call thread CPU time in milliseconds, excluding other workers and scheduler delays,
+ * over as many calls as it takes to use {@link SAMPLE_MS}.
+ */
+function perCallMs(run: (input: string) => unknown, input: string): number {
+  const start = process.threadCpuUsage();
+  let calls = 0;
+  let elapsedMs = 0;
+  do {
+    run(input);
+    calls++;
+    const elapsed = process.threadCpuUsage(start);
+    elapsedMs = (elapsed.user + elapsed.system) / 1_000;
+  } while (elapsedMs < SAMPLE_MS);
+  return elapsedMs / calls;
+}
+
+/**
+ * Times `run` on `make(n)` for n doubling from 5,000 to 320,000 characters, asserting each
+ * size's best-of-three per-call time against an absolute bound (1 ms per 1,600 characters)
+ * before timing the next, and returns the 320,000 ÷ 5,000 time ratio.
+ */
+function timeDoubling(make: (length: number) => string, run: (input: string) => unknown): number {
+  const times: number[] = [];
+  for (let length = 5_000; length <= 320_000; length *= 2) {
+    const input = make(length);
+    perCallMs(run, input);
+    const ms = Math.min(perCallMs(run, input), perCallMs(run, input), perCallMs(run, input));
+    expect(ms, `${length} characters`).toBeLessThan(length / 1_600);
+    times.push(ms);
+  }
+  return times.at(-1)! / times[0]!;
+}

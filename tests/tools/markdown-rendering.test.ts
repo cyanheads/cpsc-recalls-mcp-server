@@ -4,10 +4,13 @@
  */
 
 import MarkdownIt from 'markdown-it';
+import { micromark } from 'micromark';
+import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import { describe, expect, it } from 'vitest';
 import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
 import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
 import { cpscSearchRecalls } from '@/mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
+import { escapeMarkdown } from '@/mcp-server/tools/markdown-escape.js';
 
 const record = {
   recall_number: '25043',
@@ -54,7 +57,7 @@ function tokens(markdown: InstanceType<typeof MarkdownIt>, text: string) {
 
 describe.each([
   ['CommonMark', new MarkdownIt('commonmark')],
-  ['GFM autolinks', new MarkdownIt({ linkify: true })],
+  ['markdown-it linkify', new MarkdownIt({ linkify: true })],
 ] as const)('%s rendering', (_name, markdown) => {
   it('keeps recall and coordinated links complete and renders images with literal captions', () => {
     const detail = cpscGetRecall.format!(cpscGetRecall.output.parse(record));
@@ -135,5 +138,119 @@ describe.each([
         .map((token) => token.content)
         .join('\n'),
     ).toContain('*Label* (data:text/html,<b>unsafe</b>)');
+  });
+});
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  '#39': "'",
+  '#x27': "'",
+};
+
+/** Decodes the references an HTML renderer writes, in one pass so `&amp;lt;` stays `&lt;`. */
+function decodeHtml(html: string): string {
+  return html.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (_ref, name: string) => HTML_ENTITIES[name]!);
+}
+
+/** The text a reader sees, whitespace runs collapsed. */
+function visible(html: string): string {
+  return decodeHtml(html.replace(/<[^>]*>/g, ''))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Every link target, in order. */
+function hrefs(html: string): string[] {
+  return [...html.matchAll(/<a href="([^"]*)"/g)].map((match) => decodeHtml(match[1]!));
+}
+
+const commonMarkIt = new MarkdownIt('commonmark');
+
+/**
+ * Renderers outside the server's code: CommonMark in two implementations, and GFM through
+ * micromark's autolink-literal extension, which ends links where GitHub's cmark-gfm does
+ * (markdown-it's linkify detector does not).
+ */
+describe.each([
+  ['markdown-it CommonMark', (text: string) => commonMarkIt.render(text), false],
+  ['micromark CommonMark', (text: string) => micromark(text), false],
+  [
+    'micromark GFM',
+    (text: string) => micromark(text, { extensions: [gfm()], htmlExtensions: [gfmHtml()] }),
+    true,
+  ],
+] as const)('%s rendering of prose addresses', (_name, render, autolinks) => {
+  /** Each slot: the text as written, and the Markdown that carries it there. */
+  const slots: [string, (address: string) => [text: string, markdown: string]][] = [
+    ['after a space', (a) => [`see ${a} now`, escapeMarkdown(`see ${a} now`)]],
+    ['after "("', (a) => [`see (${a}) now`, escapeMarkdown(`see (${a}) now`)]],
+    ['at the start of a quote line', (a) => [a, `> ${escapeMarkdown(a)}`]],
+  ];
+
+  it.each([
+    ['www.example.com/a*b*', 'http://www.example.com/a*b'],
+    ['https://x.com/a*b*', 'https://x.com/a*b'],
+    ['https://x.com/?ref_=a_', 'https://x.com/?ref_=a'],
+    ['www.example.com/?a=1&amp;b=2', 'http://www.example.com/?a=1&amp;b=2'],
+  ])('shows every character of %s and links it to %s', (address, href) => {
+    for (const [slot, place] of slots) {
+      const [text, markdown] = place(address);
+      const html = render(markdown);
+      expect(visible(html), slot).toBe(text);
+      expect(hrefs(html), slot).toEqual([href]);
+    }
+  });
+
+  it('links an address before "<" without a backslash in its text or target', () => {
+    const html = render(escapeMarkdown('see www.example.com/a<b now'));
+    expect(visible(html)).toBe('see www.example.com/a<b now');
+    expect(hrefs(html)).toEqual(['http://www.example.com/a']);
+  });
+
+  it('ends a link where GFM does and shows the characters after it', () => {
+    const text = 'see https://x.com/a*b"; or 1https://x.com/c_d_ or see!https://x.com/e*f*';
+    const html = render(escapeMarkdown(text));
+    expect(visible(html)).toBe(text);
+    expect(hrefs(html)).toEqual(['https://x.com/a*b', 'https://x.com/c_d', 'https://x.com/e*f']);
+    expect(html).not.toContain('<img');
+  });
+
+  it('leaves an address with nothing to escape for GFM to link', () => {
+    const html = render(escapeMarkdown('see www.example.com/model now'));
+    expect(visible(html)).toBe('see www.example.com/model now');
+    expect(hrefs(html)).toEqual(autolinks ? ['http://www.example.com/model'] : []);
+  });
+
+  it('shows an address GFM does not autolink as escaped text', () => {
+    const text = 'a "www.x.com/a*b*" b https://my_site.com/a*b* c https://_x_ d';
+    const html = render(escapeMarkdown(text));
+    expect(visible(html)).toBe(text);
+    expect(hrefs(html)).toEqual([]);
+  });
+
+  it('carries the link form through each tool that relays CPSC titles', () => {
+    const titled = { ...record, title: 'Model see www.example.com/a*b* now' };
+    const rendered = [
+      cpscGetRecall.format!(cpscGetRecall.output.parse(titled)),
+      cpscSearchRecalls.format!(
+        cpscSearchRecalls.output.parse({ ...page, recalls: [{ ...titled, hazards: ['Burn'] }] }),
+      ),
+      cpscGetRecent.format!(
+        cpscGetRecent.output.parse({
+          ...page,
+          recalls: [{ ...titled, hazards: ['Burn'], products: ['Model'] }],
+        }),
+      ),
+    ];
+    for (const blocks of rendered) {
+      const html = render(
+        blocks.map((block) => (block.type === 'text' ? block.text : '')).join(''),
+      );
+      expect(visible(html)).toContain('Model see www.example.com/a*b* now');
+      expect(hrefs(html)).toContain('http://www.example.com/a*b');
+    }
   });
 });
