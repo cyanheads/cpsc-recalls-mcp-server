@@ -3,7 +3,7 @@
  * @module tests/tools/cpsc-get-recent.tool.test
  */
 
-import type { HandlerContext, ReasonOf } from '@cyanheads/mcp-ts-core';
+import { type HandlerContext, type ReasonOf, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -532,6 +532,227 @@ describe('cpsc_get_recent', () => {
 
       expect(sc.recalls).toHaveLength(20);
       expect(sc.notice).toBeUndefined();
+    });
+  });
+
+  /**
+   * A limit above the 100-recall page ceiling, up to the 10,000 hard ceiling, is served as
+   * 100. The ceiling notice appears only on a page the ceiling ended.
+   */
+  describe('oversized limit', () => {
+    const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
+    const CEILING_TEXT = 'a page holds at most';
+    const raws = (count: number, hazardBytes = 0) =>
+      Array.from({ length: count }, (_, i) =>
+        makeRaw({
+          RecallNumber: String(50000 + i),
+          Hazards: [
+            { Name: `Fire hazard ${'x'.repeat(hazardBytes)}`, HazardType: '', HazardTypeID: '' },
+          ],
+        }),
+      );
+    type Page = {
+      recalls: Array<{ recall_number: string }>;
+      total_found: number;
+      offset: number;
+      has_more: boolean;
+      truncated: boolean;
+      notice?: string;
+    };
+    const numbers = (list: ReadonlyArray<{ RecallNumber: string }>) =>
+      list.map((raw) => raw.RecallNumber);
+
+    it('keeps rejecting limit 0, negative, fractional, and above 10,000, and days above 365', async () => {
+      const rejected = [
+        { limit: 0 },
+        { limit: -1 },
+        { limit: 1.5 },
+        { limit: 10_001 },
+        { days: 366, limit: 500 },
+      ];
+      for (const args of rejected) {
+        const result = await runToolContract(cpscGetRecent, args);
+        expect({ args, isError: result.isError }).toEqual({ args, isError: true });
+        expect(result.structuredContent).toMatchObject({
+          error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+        });
+      }
+      expect(mockGetRecent).not.toHaveBeenCalled();
+    });
+
+    it('accepts limit 101 through 10,000 and advertises maximum 10000', async () => {
+      for (const limit of [101, 500, 10_000]) {
+        mockGetRecent.mockResolvedValueOnce([makeRaw()]);
+        const result = await runToolContract(cpscGetRecent, { limit });
+        expect({ limit, isError: result.isError ?? false }).toEqual({ limit, isError: false });
+      }
+      const { properties } = z.toJSONSchema(cpscGetRecent.input) as {
+        properties: Record<string, { minimum?: number; maximum?: number }>;
+      };
+      expect(properties.limit).toMatchObject({ minimum: 1, maximum: 10_000 });
+      expect(properties.days).toMatchObject({ minimum: 1, maximum: 365 });
+    });
+
+    it('serves 100 records with the ceiling notice on both surfaces when the ceiling ends the page', async () => {
+      mockGetRecent.mockResolvedValueOnce(raws(150));
+      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
+      const sc = result.structuredContent as Page;
+      const text = wireText(result);
+
+      expect(sc.recalls.map((r) => r.recall_number)).toEqual(numbers(raws(100)));
+      expect(sc).toMatchObject({
+        total_found: 150,
+        offset: 0,
+        has_more: true,
+        truncated: true,
+        notice:
+          'Returned 100 of the 500 requested recalls: a page holds at most 100 recalls. Continue with offset 100 for the rest.',
+      });
+      expect(text).toContain(`> ${sc.notice}`);
+      expect(text).toContain('Found 150 recalls, showing 100 from offset 0 (truncated).');
+      expect(text).toContain('More available — repeat with offset 100.');
+
+      mockGetRecent.mockResolvedValueOnce(raws(150));
+      const rest = await runToolContract(cpscGetRecent, { days: 365, limit: 500, offset: 100 });
+      const restSc = rest.structuredContent as Page;
+
+      expect(restSc.recalls.map((r) => r.recall_number)).toEqual(numbers(raws(150).slice(100)));
+      expect(restSc).toMatchObject({ has_more: false, truncated: false });
+      expect(restSc).not.toHaveProperty('notice');
+      expect(wireText(rest)).not.toContain(CEILING_TEXT);
+    });
+
+    it('returns a prefix of the limit-100 window, with paging state that matches the records returned', async () => {
+      for (const list of [raws(150), raws(60, 2_000)]) {
+        mockGetRecent.mockResolvedValueOnce(list);
+        const atCeiling = (await runToolContract(cpscGetRecent, { limit: 100 }))
+          .structuredContent as Page;
+
+        for (const limit of [101, 500, 10_000]) {
+          mockGetRecent.mockResolvedValueOnce(list);
+          const sc = (await runToolContract(cpscGetRecent, { limit })).structuredContent as Page;
+          const returned = sc.recalls.length;
+
+          expect(sc.total_found).toBe(atCeiling.total_found);
+          expect(sc.offset).toBe(0);
+          expect(returned).toBeGreaterThan(0);
+          expect(returned).toBeLessThanOrEqual(100);
+          expect(sc.recalls).toEqual(atCeiling.recalls.slice(0, returned));
+          expect(sc.has_more).toBe(returned < sc.total_found);
+          expect(sc.truncated).toBe(sc.has_more);
+          expect(sc.notice).toContain(`Continue with offset ${returned} for the rest.`);
+        }
+      }
+    });
+
+    it('names the caller limit on a budget-cut page and carries no ceiling text', async () => {
+      mockGetRecent.mockResolvedValueOnce(raws(60, 2_000));
+      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
+      const sc = result.structuredContent as Page;
+      const returned = sc.recalls.length;
+
+      expect(returned).toBeLessThan(60);
+      expect(sc.notice).toBe(
+        `Returned ${returned} of the 500 requested recalls: this page reached the 64,000-byte response size budget. Continue with offset ${returned} for the rest.`,
+      );
+      expect(wireText(result)).not.toContain(CEILING_TEXT);
+      expect(utf8(JSON.stringify(sc))).toBeLessThanOrEqual(64_000);
+      expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
+    });
+
+    it('returns every recall with no notice when all of them fit', async () => {
+      mockGetRecent.mockResolvedValueOnce(raws(13));
+      const result = await runToolContract(cpscGetRecent, { limit: 500 });
+      const sc = result.structuredContent as Page;
+
+      expect(sc.recalls).toHaveLength(13);
+      expect(sc).toMatchObject({ has_more: false, truncated: false });
+      expect(sc).not.toHaveProperty('notice');
+    });
+
+    it('gives empty-window and offset-past-end pages exactly the notice they carry at limit 100', async () => {
+      const cases: Array<[Record<string, unknown>, unknown[]]> = [
+        [{ days: 7 }, []],
+        [{ days: 7, offset: 50 }, [makeRaw()]],
+      ];
+      for (const [args, list] of cases) {
+        const notices: Array<string | undefined> = [];
+        for (const limit of [100, 500]) {
+          mockGetRecent.mockResolvedValueOnce(list);
+          const result = await runToolContract(cpscGetRecent, { ...args, limit });
+          notices.push((result.structuredContent as Page).notice);
+        }
+        expect(notices[0]).toBeDefined();
+        expect(notices[1]).toBe(notices[0]);
+      }
+    });
+
+    /**
+     * One record's hazard grows a few bytes per step, so the 100-record page walks up to the
+     * budget and past it: every page that carries the ceiling notice must still fit.
+     */
+    it('keeps each surface within the budget on every page that carries the ceiling notice', async () => {
+      const base = raws(150, 370);
+      const run = async (pad: number) => {
+        mockGetRecent.mockResolvedValueOnce([
+          makeRaw({
+            RecallNumber: '50000',
+            Hazards: [
+              { Name: `Fire hazard ${'x'.repeat(370 + pad)}`, HazardType: '', HazardTypeID: '' },
+            ],
+          }),
+          ...base.slice(1),
+        ]);
+        const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
+        const sc = result.structuredContent as Page;
+        return { sc, bytes: Math.max(utf8(JSON.stringify(sc)), utf8(wireText(result))) };
+      };
+      const { sc: first, bytes: start } = await run(0);
+      expect(first.recalls).toHaveLength(100);
+      const notice =
+        'Returned 100 of the 500 requested recalls: a page holds at most 100 recalls. Continue with offset 100 for the rest.';
+      let largestCeilingPage = 0;
+      let budgetCut = false;
+      for (let pad = Math.max(0, 64_000 - start - 600); pad <= 64_000 - start + 100; pad += 3) {
+        const { sc, bytes } = await run(pad);
+        expect({ pad, fits: bytes <= 64_000 }).toEqual({ pad, fits: true });
+        if (sc.recalls.length === 100) {
+          expect(sc.notice).toBe(notice);
+          largestCeilingPage = Math.max(largestCeilingPage, bytes);
+        } else {
+          budgetCut = true;
+          expect(sc.notice).toContain('response size budget');
+        }
+      }
+      expect(budgetCut).toBe(true);
+      /** The fullest ceiling page sits within the notice's own size of the budget, so reserving it is what kept the page under. */
+      expect(largestCeilingPage).toBeGreaterThan(64_000 - utf8(notice));
+    });
+
+    /** Search rows gained last_updated and distributors; the recent feed's rows did not. */
+    it('keeps the recent row fields unchanged', async () => {
+      mockGetRecent.mockResolvedValueOnce([
+        makeRaw({
+          LastPublishDate: '2026-01-02T00:00:00',
+          Distributors: [{ Name: 'Northwind Supply', CompanyID: '' }],
+        }),
+      ]);
+      const result = await runToolContract(cpscGetRecent, { days: 7 });
+      const [row] = (result.structuredContent as { recalls: Array<Record<string, unknown>> })
+        .recalls;
+
+      expect(Object.keys(row ?? {})).toEqual([
+        'recall_number',
+        'recall_date',
+        'title',
+        'hazards',
+        'remedy_options',
+        'products',
+        'cpsc_url',
+        'data_quality_notes',
+      ]);
+      expect(wireText(result)).not.toContain('Northwind');
+      expect(wireText(result)).not.toContain('2026-01-02');
     });
   });
 

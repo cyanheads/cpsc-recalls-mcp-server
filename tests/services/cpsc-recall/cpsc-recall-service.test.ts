@@ -5,6 +5,7 @@
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { fetchWithTimeout } from '@cyanheads/mcp-ts-core/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
 import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
@@ -13,6 +14,15 @@ import {
   CpscRecallService,
   initCpscRecallService,
 } from '@/services/cpsc-recall/cpsc-recall-service.js';
+
+/**
+ * The real `fetchWithTimeout` behind a spy, so a test can read the per-attempt timeout
+ * the service asked for while the framework's own timeout and abort handling still run.
+ */
+vi.mock('@cyanheads/mcp-ts-core/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cyanheads/mcp-ts-core/utils')>();
+  return { ...actual, fetchWithTimeout: vi.fn(actual.fetchWithTimeout) };
+});
 
 /** A genuine recall record, trimmed to the fields the service inspects. */
 const genuineRecord = {
@@ -72,6 +82,7 @@ describe('CpscRecallService', () => {
     mockFetch.mockReset();
     mockFetch.mockRejectedValue(new Error('unmocked fetch'));
     vi.stubGlobal('fetch', mockFetch);
+    vi.mocked(fetchWithTimeout).mockClear();
   });
 
   afterEach(() => {
@@ -102,10 +113,13 @@ describe('CpscRecallService', () => {
     expect(results[0]?.Description).toBeNull();
   });
 
-  it('getByNumber returns null when the API returns an empty array', async () => {
+  it('getByNumber returns no recall when the API returns an empty array', async () => {
     mockFetch.mockResolvedValue(jsonResponse([]));
 
-    await expect(service.getByNumber('99999', ctx)).resolves.toBeNull();
+    await expect(service.getByNumber('99999', ctx)).resolves.toEqual({
+      recall: null,
+      otherNumbers: [],
+    });
   });
 
   it('forwards every declared search parameter to the upstream query string', async () => {
@@ -310,7 +324,7 @@ describe('CpscRecallService', () => {
       };
       mockFetch.mockResolvedValue(jsonResponse([dataShaped]));
 
-      await expect(service.getByNumber('04084', ctx)).resolves.toEqual(dataShaped);
+      await expect(service.getByNumber('04084', ctx)).resolves.toEqual({ recall: dataShaped });
     });
   });
 
@@ -352,7 +366,7 @@ describe('CpscRecallService', () => {
     it('decodes references and removes tags in every text field, nested entries included, on every method', async () => {
       mockFetch.mockImplementation(() => Promise.resolve(jsonResponse([marked])));
 
-      await expect(service.getByNumber('23085', ctx)).resolves.toEqual(expected);
+      await expect(service.getByNumber('04084', ctx)).resolves.toEqual({ recall: expected });
       await expect(service.search({ Retailer: 'Stoopher' }, ctx)).resolves.toEqual([expected]);
       await expect(service.getRecent('2023-01-01', '2023-02-01', ctx)).resolves.toEqual([expected]);
     });
@@ -385,7 +399,7 @@ describe('CpscRecallService', () => {
     it('retries once through the reordered query string and returns the record', async () => {
       routes({ [lookup]: [providerFailureRow], [reordered]: [record] });
 
-      await expect(service.getByNumber('23085', ctx)).resolves.toEqual(record);
+      await expect(service.getByNumber('23085', ctx)).resolves.toEqual({ recall: record });
       expect(requested()).toEqual([lookup, reordered]);
     });
 
@@ -572,7 +586,7 @@ describe('CpscRecallService', () => {
         .mockResolvedValueOnce(jsonResponse([genuineRecord]));
 
       await expect(service.getByNumber('04084', ctx)).resolves.toMatchObject({
-        RecallNumber: '04084',
+        recall: { RecallNumber: '04084' },
       });
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
@@ -584,6 +598,303 @@ describe('CpscRecallService', () => {
 
       const init = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
       expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+  });
+
+  /**
+   * CPSC's `RecallNumber` filter is a case-insensitive substring match, in no stable order:
+   * the bare base of a 1998–2001 lettered family returns every lettered sibling, each a
+   * separate recall. Fixture order and titles are CPSC's answer to `RecallNumber=01160`.
+   */
+  describe('lookup by exact recall number', () => {
+    const family = [
+      {
+        ...genuineRecord,
+        RecallID: 6802,
+        RecallNumber: '01160b',
+        Title: 'CPSC, Giant Bicycle, Inc. Recall Giant Bicycle Forks',
+      },
+      {
+        ...genuineRecord,
+        RecallID: 803,
+        RecallNumber: '01160a',
+        Title: "CPSC, Raymond Geddes & Co. Inc. Recall Push'n Pop Toys",
+      },
+      {
+        ...genuineRecord,
+        RecallID: 6803,
+        RecallNumber: '01160c',
+        Title: 'CPSC, Schottenstein and Value City Department Stores Recall Candles',
+      },
+    ];
+    const modern = { ...genuineRecord, RecallID: 25043, RecallNumber: '25043' };
+    const getRecall = async (recall_number: string | number, body: unknown[]) => {
+      mockFetch.mockImplementation(() => Promise.resolve(jsonResponse(body)));
+      initCpscRecallService();
+      const result = await runToolContract(cpscGetRecall, { recall_number } as never);
+      const text = (result.content ?? [])
+        .map((block) => ('text' in block ? block.text : ''))
+        .join('');
+      return { result, text };
+    };
+
+    for (const [requested, body, expected] of [
+      ['01160b', [family[0]], '01160b'],
+      ['25043', [modern], '25043'],
+      [25043, [modern], '25043'],
+    ] as const) {
+      it(`returns ${expected} for ${JSON.stringify(requested)} against its own single-record response`, async () => {
+        const { result } = await getRecall(requested, [...body]);
+
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({ recall_number: expected });
+      });
+    }
+
+    it('fails not_found for a family base, naming every returned recall in sorted order on both surfaces', async () => {
+      const { result, text } = await getRecall('01160', family);
+      const hint =
+        '01160a, 01160b, 01160c are separate recalls, not parts of one recall — call cpsc_get_recall with the number you mean.';
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message:
+            'No CPSC recall has the number "01160"; CPSC matched other recalls whose numbers contain it.',
+          data: { reason: 'not_found', recovery: { hint } },
+        },
+      });
+      expect(result.structuredContent).not.toHaveProperty('recall_number');
+      expect(text).toContain(hint);
+      expect(text).not.toContain('Giant Bicycle');
+    });
+
+    it('returns the exact record when CPSC lists a sibling before it', async () => {
+      const base = { ...genuineRecord, RecallID: 1, RecallNumber: '01160', Title: 'Base Recall' };
+      const { result } = await getRecall('01160', [family[1], base, family[0]]);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        recall_number: '01160',
+        title: 'Base Recall',
+      });
+    });
+
+    it('keeps the declared static hint when CPSC returns no rows', async () => {
+      const { result, text } = await getRecall('99998', []);
+
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message: 'No CPSC recall found with number "99998".',
+          data: {
+            reason: 'not_found',
+            recovery: {
+              hint: expect.stringMatching(/^Verify the recall number: 5 digits, e\.g\. "25043"/),
+            },
+          },
+        },
+      });
+      expect(text).toContain('cpsc_search_recalls');
+    });
+
+    it('getByNumber returns the exact record, the other numbers sorted, or nothing', async () => {
+      mockFetch.mockImplementation(() => Promise.resolve(jsonResponse(family)));
+      await expect(service.getByNumber('01160c', ctx)).resolves.toEqual({ recall: family[2] });
+      await expect(service.getByNumber('01160', ctx)).resolves.toEqual({
+        recall: null,
+        otherNumbers: ['01160a', '01160b', '01160c'],
+      });
+
+      mockFetch.mockImplementation(() => Promise.resolve(jsonResponse([])));
+      await expect(service.getByNumber('99998', ctx)).resolves.toEqual({
+        recall: null,
+        otherNumbers: [],
+      });
+    });
+
+    it('compares recall numbers case-insensitively, as CPSC does', async () => {
+      const upper = { ...family[0], RecallNumber: '01160B' };
+      mockFetch.mockImplementation(() => Promise.resolve(jsonResponse([upper])));
+
+      await expect(service.getByNumber('01160b', ctx)).resolves.toEqual({ recall: upper });
+    });
+  });
+
+  /**
+   * One 50 s budget bounds a call's upstream work: every attempt, every backoff, and the
+   * reordered provider-failure query. Fake time drives a fetch that answers only when its
+   * signal aborts, as the platform's does.
+   */
+  describe('total deadline', () => {
+    const hang = (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    /** Follows a promise without awaiting it, so a test can step the clock up to a bound. */
+    const track = <T>(promise: Promise<T>) => {
+      const state: { settled: boolean; value?: T; error?: unknown } = { settled: false };
+      promise.then(
+        (value) => Object.assign(state, { settled: true, value }),
+        (error: unknown) => Object.assign(state, { settled: true, error }),
+      );
+      return state;
+    };
+    /** The per-attempt timeout each `fetchWithTimeout` call was given, in call order. */
+    const attemptTimeouts = () => vi.mocked(fetchWithTimeout).mock.calls.map(([, ms]) => ms);
+    const requested = () => mockFetch.mock.calls.map(([url]) => String(url));
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const methods = [
+      ['search', (c: typeof ctx) => service.search({ RecallDateEnd: '2026-09-30' }, c)],
+      ['getByNumber', (c: typeof ctx) => service.getByNumber('25043', c)],
+      ['getRecent', (c: typeof ctx) => service.getRecent('2026-09-01', '2026-09-30', c)],
+    ] as const;
+
+    for (const [name, call] of methods) {
+      it(`${name} rejects at 50 s with every fetch hanging, the second attempt clamped to what remains`, async () => {
+        mockFetch.mockImplementation(hang);
+        const state = track<unknown>(call(ctx));
+
+        await vi.advanceTimersByTimeAsync(49_999);
+        expect(state.settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(state.settled).toBe(true);
+        expect(state.error).toBeInstanceOf(McpError);
+        expect(state.error).toMatchObject({
+          code: JsonRpcErrorCode.Timeout,
+          data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+        });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        const [first, second] = attemptTimeouts();
+        expect(first).toBe(30_000);
+        // 30 s spent on the first attempt plus a 500 ms ±25% backoff.
+        expect(second).toBeGreaterThanOrEqual(19_375);
+        expect(second).toBeLessThanOrEqual(19_625);
+      });
+    }
+
+    it('spends what remains on the reordered query after a provider failure, never re-requesting the failed query string', async () => {
+      const lookup =
+        'https://www.saferproducts.gov/RestWebServices/Recall?format=json&RecallNumber=25043';
+      const reordered =
+        'https://www.saferproducts.gov/RestWebServices/Recall?RecallNumber=25043&format=json';
+      const providerFailureRow = {
+        ...cpscErrorRow,
+        Title: 'Error retrieving Recalls: The underlying provider failed on Open.',
+      };
+      let lookups = 0;
+      mockFetch.mockImplementation((url: string, init?: RequestInit) =>
+        url === lookup && ++lookups === 2
+          ? Promise.resolve(jsonResponse([providerFailureRow]))
+          : hang(url, init),
+      );
+      const state = track(service.getByNumber('25043', ctx));
+
+      await vi.advanceTimersByTimeAsync(49_999);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(state.settled).toBe(true);
+      expect(state.error).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { reason: 'retry_deadline_exceeded' },
+      });
+      expect(requested()).toEqual([lookup, lookup, reordered]);
+      const [, secondLookup, reorderedAttempt] = attemptTimeouts();
+      expect(reorderedAttempt).toBe(secondLookup);
+      expect(reorderedAttempt).toBeLessThanOrEqual(19_625);
+    });
+
+    const tools = [
+      ['cpsc_get_recall', () => runToolContract(cpscGetRecall, { recall_number: '25043' })],
+      ['cpsc_search_recalls', () => runToolContract(cpscSearchRecalls, { date_end: '2026-09-30' })],
+      ['cpsc_get_recent', () => runToolContract(cpscGetRecent, { days: 7 })],
+    ] as const;
+
+    for (const [name, call] of tools) {
+      it(`${name} reports the expiry as retryable upstream_error on both surfaces`, async () => {
+        mockFetch.mockImplementation(hang);
+        initCpscRecallService();
+        const state = track(call());
+
+        await vi.advanceTimersByTimeAsync(50_000);
+
+        expect(state.settled).toBe(true);
+        const result = state.value as Awaited<ReturnType<typeof call>>;
+        const text = (result.content ?? [])
+          .map((block) => ('text' in block ? block.text : ''))
+          .join('');
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.ServiceUnavailable,
+            message: expect.stringContaining('retry deadline'),
+            data: {
+              reason: 'upstream_error',
+              retryable: true,
+              recovery: { hint: expect.stringContaining('Retry in a few seconds') },
+            },
+          },
+        });
+        expect(text).toContain('retry deadline');
+        expect(text).toContain('Retry in a few seconds');
+      });
+    }
+
+    it('rejects as a cancellation when the caller aborts during an attempt', async () => {
+      mockFetch.mockImplementation(hang);
+      const controller = new AbortController();
+      const state = track(
+        service.search({ ProductName: 'crib' }, createMockContext({ signal: controller.signal })),
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.settled).toBe(true);
+      expect(state.error).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects with the abort reason, not an expiry, when the caller aborts during a backoff', async () => {
+      mockFetch.mockRejectedValue(new Error('socket hang up'));
+      const controller = new AbortController();
+      const state = track(
+        service.search({ ProductName: 'crib' }, createMockContext({ signal: controller.signal })),
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(state.settled).toBe(true);
+      expect(state.error).toBe(controller.signal.reason);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns the success that follows a fast transient failure, with a full attempt timeout', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('socket hang up'))
+        .mockResolvedValueOnce(jsonResponse([genuineRecord]));
+      const state = track(service.search({ ProductName: 'toy' }, ctx));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(state.settled).toBe(true);
+      expect(state.value).toEqual([genuineRecord]);
+      expect(attemptTimeouts()).toEqual([30_000, 30_000]);
     });
   });
 });

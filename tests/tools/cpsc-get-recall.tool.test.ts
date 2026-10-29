@@ -46,6 +46,12 @@ const makeRaw = (overrides?: Record<string, unknown>) => ({
   ...overrides,
 });
 
+/** The service's answer when CPSC holds a recall with exactly the requested number. */
+const found = (overrides?: Record<string, unknown>) => ({ recall: makeRaw(overrides) });
+
+/** The service's answer when CPSC returned no rows at all. */
+const noneFound = { recall: null, otherNumbers: [] };
+
 /** A full result matching the output schema, for exercising format() directly. */
 const makeFormatResult = (overrides?: Record<string, unknown>) => ({
   recall_number: '25043',
@@ -108,7 +114,7 @@ describe('cpsc_get_recall', () => {
   });
 
   it('returns full normalized recall', async () => {
-    mockGetByNumber.mockResolvedValueOnce(makeRaw());
+    mockGetByNumber.mockResolvedValueOnce(found());
     const input = cpscGetRecall.input.parse({ recall_number: '25043' });
     const result = await cpscGetRecall.handler(input, ctx);
 
@@ -128,8 +134,8 @@ describe('cpsc_get_recall', () => {
     expect(result.images).toHaveLength(1);
   });
 
-  it('throws not_found when API returns null', async () => {
-    mockGetByNumber.mockResolvedValueOnce(null);
+  it('throws not_found when no recall has the requested number', async () => {
+    mockGetByNumber.mockResolvedValueOnce(noneFound);
     const input = cpscGetRecall.input.parse({ recall_number: '99999' });
     await expect(cpscGetRecall.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'not_found' },
@@ -171,7 +177,7 @@ describe('cpsc_get_recall', () => {
   });
 
   it('includes cpsc_jurisdiction in result', async () => {
-    mockGetByNumber.mockResolvedValueOnce(makeRaw());
+    mockGetByNumber.mockResolvedValueOnce(found());
     const input = cpscGetRecall.input.parse({ recall_number: '25043' });
     const result = await cpscGetRecall.handler(input, ctx);
     expect(result.cpsc_jurisdiction).toContain('CPSC covers');
@@ -193,7 +199,7 @@ describe('cpsc_get_recall', () => {
 
   it('sparse payload — null consumer_contact surfaced as null', async () => {
     const raw = makeRaw({ ConsumerContact: null, ProductUPCs: [], Inconjunctions: [] });
-    mockGetByNumber.mockResolvedValueOnce(raw);
+    mockGetByNumber.mockResolvedValueOnce({ recall: raw });
     const input = cpscGetRecall.input.parse({ recall_number: '25043' });
     const result = await cpscGetRecall.handler(input, ctx);
     expect(result.consumer_contact).toBeNull();
@@ -203,7 +209,7 @@ describe('cpsc_get_recall', () => {
 
   describe('absent upstream description', () => {
     it('returns an otherwise-complete record whose Description is null', async () => {
-      mockGetByNumber.mockResolvedValueOnce(makeRaw({ RecallNumber: '04084', Description: null }));
+      mockGetByNumber.mockResolvedValueOnce(found({ RecallNumber: '04084', Description: null }));
       const input = cpscGetRecall.input.parse({ recall_number: '04084' });
       const result = await cpscGetRecall.handler(input, ctx);
 
@@ -215,7 +221,7 @@ describe('cpsc_get_recall', () => {
 
     it('notes the absence for both the null and empty-string forms', async () => {
       for (const Description of [null, '']) {
-        mockGetByNumber.mockResolvedValueOnce(makeRaw({ Description }));
+        mockGetByNumber.mockResolvedValueOnce(found({ Description }));
         const input = cpscGetRecall.input.parse({ recall_number: '25043' });
         const result = await cpscGetRecall.handler(input, ctx);
 
@@ -284,7 +290,7 @@ describe('cpsc_get_recall', () => {
   describe('data quality notes and source caveat', () => {
     it('populates a note per absent upstream field', async () => {
       mockGetByNumber.mockResolvedValueOnce(
-        makeRaw({ Description: null, Hazards: [], Products: [] }),
+        found({ Description: null, Hazards: [], Products: [] }),
       );
       const input = cpscGetRecall.input.parse({ recall_number: '25043' });
       const result = await cpscGetRecall.handler(input, ctx);
@@ -297,7 +303,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('leaves notes empty for a complete record', async () => {
-      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      mockGetByNumber.mockResolvedValueOnce(found());
       const input = cpscGetRecall.input.parse({ recall_number: '25043' });
       const result = await cpscGetRecall.handler(input, ctx);
 
@@ -383,7 +389,7 @@ describe('cpsc_get_recall', () => {
 
     it('preserves spaces in the recall page link and leaves structuredContent unchanged', async () => {
       const url = 'https://www.cpsc.gov/Recalls/2024/Torquay eTrading Recalls';
-      mockGetByNumber.mockResolvedValueOnce(makeRaw({ URL: url }));
+      mockGetByNumber.mockResolvedValueOnce(found({ URL: url }));
       const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });
 
       expect(result.structuredContent).toMatchObject({ cpsc_url: url });
@@ -399,7 +405,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('renders images and coordinated recall links without spaces', async () => {
-      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      mockGetByNumber.mockResolvedValueOnce(found());
       const text = wireText(await runToolContract(cpscGetRecall, { recall_number: '25043' }));
 
       expect(text).toContain(
@@ -415,7 +421,7 @@ describe('cpsc_get_recall', () => {
       const image = 'https://www.cpsc.gov/s3fs-public/Recalled Cannondale 26” Dave bicycle.png';
       const coordinated = 'https://recalls-rappels.canada.ca/en/alert-recall/cannondale dave';
       mockGetByNumber.mockResolvedValueOnce(
-        makeRaw({
+        found({
           Images: [{ URL: image, Caption: 'Recalled Cannondale 26" Dave bicycle' }],
           Inconjunctions: [{ URL: coordinated }],
         }),
@@ -438,9 +444,7 @@ describe('cpsc_get_recall', () => {
     /** Record 26799's image address ends in "."; GFM leaves trailing punctuation out of an autolink. */
     it('preserves trailing punctuation in the image destination', async () => {
       const image = 'https://cpsc.gov/s3fs-public/ABC3.png?VersionId=YznyGDlwDP5iz4.7.f1yb1i.';
-      mockGetByNumber.mockResolvedValueOnce(
-        makeRaw({ Images: [{ URL: image, Caption: 'Label' }] }),
-      );
+      mockGetByNumber.mockResolvedValueOnce(found({ Images: [{ URL: image, Caption: 'Label' }] }));
       const result = await runToolContract(cpscGetRecall, { recall_number: '26799' });
 
       expect(result.structuredContent).toMatchObject({ images: [{ url: image }] });
@@ -473,7 +477,7 @@ describe('cpsc_get_recall', () => {
       const controller = new AbortController();
       mockGetByNumber.mockImplementationOnce(async () => {
         controller.abort();
-        return makeRaw();
+        return found();
       });
       const result = await runToolContract(
         cpscGetRecall,
@@ -487,7 +491,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('carries the record on structuredContent and in the text channel', async () => {
-      mockGetByNumber.mockResolvedValueOnce(makeRaw());
+      mockGetByNumber.mockResolvedValueOnce(found());
       const result = await runToolContract(cpscGetRecall, { recall_number: '25043' });
 
       expect(result.isError).toBeFalsy();
@@ -505,7 +509,7 @@ describe('cpsc_get_recall', () => {
     });
 
     it('reports not_found with its recovery hint on both surfaces', async () => {
-      mockGetByNumber.mockResolvedValueOnce(null);
+      mockGetByNumber.mockResolvedValueOnce(noneFound);
       const result = await runToolContract(cpscGetRecall, { recall_number: '99999' });
 
       expect(result.isError).toBe(true);
@@ -516,6 +520,28 @@ describe('cpsc_get_recall', () => {
         },
       });
       expect(wireText(result)).toContain('cpsc_search_recalls');
+    });
+
+    it('reports not_found with a hint naming the other recalls CPSC matched, on both surfaces', async () => {
+      mockGetByNumber.mockResolvedValueOnce({
+        recall: null,
+        otherNumbers: ['01160a', '01160b', '01160c'],
+      });
+      const result = await runToolContract(cpscGetRecall, { recall_number: '01160' });
+      const hint =
+        '01160a, 01160b, 01160c are separate recalls, not parts of one recall — call cpsc_get_recall with the number you mean.';
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          message:
+            'No CPSC recall has the number "01160"; CPSC matched other recalls whose numbers contain it.',
+          data: { reason: 'not_found', recovery: { hint } },
+        },
+      });
+      expect(wireText(result)).toContain(hint);
+      expect(wireText(result)).not.toContain('Verify the recall number');
     });
 
     it('rejects an argument key the input schema does not declare', async () => {

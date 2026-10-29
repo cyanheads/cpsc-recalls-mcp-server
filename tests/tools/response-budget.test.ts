@@ -9,8 +9,12 @@ import { describe, expect, it } from 'vitest';
 import {
   budgetCutNotice,
   countWithinBudget,
+  LIMIT_CEILING,
+  pageCeilingNotice,
   pageOverheadBytes,
   RESPONSE_BUDGET_BYTES,
+  shortPageNotice,
+  shortPageNoticeBound,
 } from '@/mcp-server/tools/response-budget.js';
 
 /** Identity renderer: a string record renders as itself, so its JSON form is two bytes longer. */
@@ -144,6 +148,102 @@ describe('response budget', () => {
       expect(budgetCutNotice(34, 200, 74)).toBe(
         'Returned 34 of the 200 requested recalls: this page reached the 64,000-byte response size budget. Continue with offset 74 for the rest.',
       );
+    });
+  });
+
+  describe('oversized limit', () => {
+    it('caps limit at 10,000', () => {
+      expect(LIMIT_CEILING).toBe(10_000);
+    });
+
+    it('names the requested limit, the page ceiling, and the next offset', () => {
+      expect(pageCeilingNotice(500, 200, 200)).toBe(
+        'Returned 200 of the 500 requested recalls: a page holds at most 200 recalls. Continue with offset 200 for the rest.',
+      );
+    });
+
+    /** `returned`, `windowLength`, `requested`, `hasMore` at a 200-recall page ceiling and offset 400. */
+    const states: Array<[string, [number, number, number, boolean], string | undefined]> = [
+      [
+        'a budget cut under an oversized limit names the caller limit, not the ceiling',
+        [33, 200, 500, true],
+        'Returned 33 of the 500 requested recalls: this page reached the 64,000-byte response size budget. Continue with offset 433 for the rest.',
+      ],
+      [
+        'a budget cut on a short final window',
+        [5, 9, 20, true],
+        'Returned 5 of the 20 requested recalls: this page reached the 64,000-byte response size budget. Continue with offset 405 for the rest.',
+      ],
+      [
+        'a page the ceiling ended',
+        [200, 200, 500, true],
+        'Returned 200 of the 500 requested recalls: a page holds at most 200 recalls. Continue with offset 600 for the rest.',
+      ],
+      [
+        'a page the ceiling ended under the 10,000 hard ceiling',
+        [200, 200, 10_000, true],
+        'Returned 200 of the 10000 requested recalls: a page holds at most 200 recalls. Continue with offset 600 for the rest.',
+      ],
+      ['a ceiling page that holds the last match', [200, 200, 500, false], undefined],
+      [
+        'remaining matches that all fit under an oversized limit',
+        [150, 150, 500, false],
+        undefined,
+      ],
+      ['a full page at a limit equal to the ceiling', [200, 200, 200, true], undefined],
+      ['a full page under the ceiling', [20, 20, 20, true], undefined],
+      ['an empty page', [0, 0, 500, false], undefined],
+    ];
+    it.each(states)(
+      'shortPageNotice: %s',
+      (_, [returned, windowLength, requested, hasMore], expected) => {
+        expect(
+          shortPageNotice({
+            returned,
+            windowLength,
+            requested,
+            pageCeiling: 200,
+            offset: 400,
+            hasMore,
+          }),
+        ).toBe(expected);
+      },
+    );
+
+    /**
+     * The overhead reserves one notice for every short page, so the bound must be at least
+     * as long as each notice a page at those counts can carry.
+     */
+    it('bounds every short-page notice a page can carry', () => {
+      const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
+      for (const pageCeiling of [100, 200]) {
+        for (const requested of [1, 20, 99, 100, 101, 199, 200, 201, 500, 9_999, 10_000]) {
+          for (const offset of [0, 7, 9_990, 1_234_567]) {
+            const bound = bytes(shortPageNoticeBound(requested, pageCeiling, offset));
+            const pageSize = Math.min(requested, pageCeiling);
+            /** Every budget cut (returned below a full window) plus the full window itself. */
+            const notices = Array.from({ length: pageSize }, (_, i) =>
+              shortPageNotice({
+                returned: i + 1,
+                windowLength: pageSize,
+                requested,
+                pageCeiling,
+                offset,
+                hasMore: true,
+              }),
+            ).filter((notice) => notice !== undefined);
+            expect(notices).toHaveLength(pageSize - 1 + (requested > pageCeiling ? 1 : 0));
+            for (const notice of notices) {
+              expect({ requested, pageCeiling, offset, fits: bytes(notice) <= bound }).toEqual({
+                requested,
+                pageCeiling,
+                offset,
+                fits: true,
+              });
+            }
+          }
+        }
+      }
     });
   });
 });

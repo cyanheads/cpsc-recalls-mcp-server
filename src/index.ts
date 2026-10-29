@@ -24,7 +24,7 @@ await createApp({
   prompts: [],
   skills: 'skills',
   instructions:
-    'CPSC consumer product recalls from saferproducts.gov. Search with cpsc_search_recalls, which needs at least one filter (a product, brand, hazard, or other text filter, or a date bound); browse the latest recalls with cpsc_get_recent, and pass a recall number from either to cpsc_get_recall for the full record. CPSC jurisdiction: consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are covered by other agencies.',
+    'CPSC consumer product recalls from saferproducts.gov. Search with cpsc_search_recalls, which needs at least one filter (a product, brand, hazard, or other text filter, or a date bound); browse the latest recalls with cpsc_get_recent, and pass a recall number from either to cpsc_get_recall for the full record. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
   setup(core) {
     void core;
     initCpscRecallService();

@@ -9,9 +9,11 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
-  budgetCutNotice,
   countWithinBudget,
+  LIMIT_CEILING,
   pageOverheadBytes,
+  shortPageNotice,
+  shortPageNoticeBound,
 } from '@/mcp-server/tools/response-budget.js';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 import type { CpscSearchParams, RawRecall } from '@/services/cpsc-recall/types.js';
@@ -21,7 +23,7 @@ import type { CpscSearchParams, RawRecall } from '@/services/cpsc-recall/types.j
  * carry, plus a routing sentence.
  */
 const JURISDICTION =
-  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF). For those categories, use the appropriate server.';
+  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing — including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks. Food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies. Search here before routing a product near one of those lines to another agency.';
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
@@ -34,6 +36,9 @@ const SOURCE_NOTE =
  * recall date (1973-06-08), so it never excludes a record.
  */
 const RECALL_DATE_FLOOR = '1970-01-01';
+
+/** Most recalls one page holds; a larger `limit` is served as this many. */
+const PAGE_CEILING = 200;
 
 type TextFilterKey =
   | 'product_name'
@@ -127,9 +132,10 @@ const recallSchema = z
     recall_number: z
       .string()
       .describe(
-        'Recall identifier (5-digit numeric for 2002+ records, e.g. "25043"; 6-char with letter suffix for 1998–2001 records, e.g. "99003a"). Pass to cpsc_get_recall for full detail.',
+        'Recall identifier: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Pass to cpsc_get_recall for full detail.',
       ),
     recall_date: z.string().describe('Date the recall was issued, ISO 8601.'),
+    last_updated: z.string().describe('Date last published, ISO 8601.'),
     title: z.string().describe('Official recall title.'),
     hazards: z
       .array(z.string().describe('Hazard description — what is dangerous.'))
@@ -168,6 +174,9 @@ const recallSchema = z
       .describe(
         'Retailer names and sale details (narrative text including stores, dates, price range).',
       ),
+    distributors: z
+      .array(z.string().describe('Distributor name.'))
+      .describe('Distributor company names.'),
     cpsc_url: z.string().describe('Official CPSC recall page URL for human verification.'),
     images: z
       .array(
@@ -208,6 +217,7 @@ function toSearchRecall(r: RawRecall): SearchRecall {
   return {
     recall_number: r.RecallNumber,
     recall_date: r.RecallDate.slice(0, 10),
+    last_updated: r.LastPublishDate.slice(0, 10),
     title: r.Title,
     hazards,
     remedy_options: r.RemedyOptions.map((o) => o.Option).filter(Boolean),
@@ -219,6 +229,7 @@ function toSearchRecall(r: RawRecall): SearchRecall {
     manufacturers: r.Manufacturers.map((m) => m.Name).filter(Boolean),
     importers: r.Importers.map((i) => i.Name).filter(Boolean),
     retailers: r.Retailers.map((ret) => ret.Name).filter(Boolean),
+    distributors: r.Distributors.map((d) => d.Name).filter(Boolean),
     cpsc_url: r.URL,
     images: r.Images.map((img) => ({ url: img.URL, caption: img.Caption })),
     data_quality_notes,
@@ -234,6 +245,7 @@ function renderRecallBlock(r: SearchRecall): string {
   const lines: string[] = [];
   lines.push(`## [${r.recall_number}] — ${md(r.title)} (${r.recall_date})`);
   lines.push('CPSC source fields:');
+  lines.push(`**Last updated:** ${r.last_updated}`);
 
   const hazardText = r.hazards.length > 0 ? md(r.hazards.join('; ')) : 'Not specified';
   lines.push(`**Hazard:** ${hazardText}`);
@@ -258,8 +270,8 @@ function renderRecallBlock(r: SearchRecall): string {
   lines.push(`**Sold by:** ${soldBy}`);
 
   /**
-   * Manufacturer and importer are distinct roles and CPSC org names contain commas,
-   * so each role gets its own line and entries are separated with '; '.
+   * Manufacturer, importer, and distributor are distinct roles and CPSC org names contain
+   * commas, so each role gets its own line and entries are separated with '; '.
    */
   if (r.manufacturers.length > 0) {
     lines.push(`**Manufacturer:** ${md(r.manufacturers.join('; '))}`);
@@ -269,6 +281,9 @@ function renderRecallBlock(r: SearchRecall): string {
   }
   if (r.manufacturers.length === 0 && r.importers.length === 0) {
     lines.push('**Manufacturer/Importer:** Not specified');
+  }
+  if (r.distributors.length > 0) {
+    lines.push(`**Distributor:** ${md(r.distributors.join('; '))}`);
   }
 
   if (r.images.length > 0) {
@@ -351,7 +366,7 @@ function zeroMatchNotice(
 export const cpscSearchRecalls = tool('cpsc_search_recalls', {
   title: 'Search CPSC Recalls',
   description:
-    'Search consumer product recalls from the CPSC (Consumer Product Safety Commission) — toys, electronics, furniture, appliances, children\'s products, tools, and clothing. Give at least one text filter or date bound; to browse the latest recalls without one, use cpsc_get_recent. Filters combine with AND, and a text filter matches records whose field contains every one of its words, in any order and case-insensitively. Start with title_search when you have a product in hand — CPSC titles carry the brand, product, and hazard phrasing. For hazard types ("fire", "choking", "burn"), use hazard_search, which matches hazard descriptions, product names, and remedy instructions. When manufacturer finds nothing, try importer, retailer, or distributor: many recalls name one of those as the responsible company. Page past limit with offset — total_found counts every match and has_more says whether more remain; a page returns fewer than limit recalls when it reaches the 64,000-byte response size budget. Pass a recall_number to cpsc_get_recall for the full record, including the complete description, all images, and incident reports. CPSC jurisdiction: consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are covered by other agencies.',
+    'Search consumer product recalls from the CPSC (Consumer Product Safety Commission) — toys, electronics, furniture, appliances, children\'s products, tools, and clothing. Give at least one text filter or date bound; to browse the latest recalls without one, use cpsc_get_recent. Filters combine with AND, and a text filter matches records whose field contains every one of its words, in any order — each word as a case-insensitive substring with no stemming, so "fire" also matches fireworks and "battery" misses batteries; search a stem instead ("batter" finds battery and batteries). Start with title_search when you have a product in hand — CPSC titles carry the brand, product, and hazard phrasing. For hazard types ("fire", "choking", "burn"), use hazard_search, which matches hazard descriptions, product names, and remedy instructions. When manufacturer finds nothing, try importer, retailer, or distributor: many recalls name one of those as the responsible company. Page past limit with offset — total_found counts every match and has_more says whether more remain; a page returns fewer than limit recalls when it reaches the 64,000-byte response size budget. Pass a recall_number to cpsc_get_recall for the full record, including the complete description, all images, and incident reports. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   /**
@@ -367,63 +382,63 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       .max(500)
       .optional()
       .describe(
-        'Product name to search for, e.g. "crib", "space heater", "bicycle". Matches recalls whose product names contain every word, in any order — partial words work.',
+        'Product name to search for, e.g. "crib", "space heater", "bicycle". Matches recalls whose product names contain every word, in any order, each as a case-insensitive substring with no stemming — partial words work.',
       ),
     manufacturer: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Manufacturer name, e.g. "Samsung", "LEGO". Matches recalls whose manufacturer names contain every word, in any order. Many recalls name the importer, retailer, or distributor rather than the manufacturer — try those filters when this finds nothing.',
+        'Manufacturer name, e.g. "Samsung", "LEGO". Matches recalls whose manufacturer names contain every word, in any order, each as a case-insensitive substring with no stemming. Many recalls name the importer, retailer, or distributor rather than the manufacturer — try those filters when this finds nothing.',
       ),
     retailer: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Retailer name, e.g. "Walmart", "Target", "Amazon". Matches recalls whose retailer text (store name, dates sold, and price) contains every word, in any order.',
+        'Retailer name, e.g. "Walmart", "Target", "Amazon". Matches recalls whose retailer text (store name, dates sold, and price) contains every word, in any order, each as a case-insensitive substring with no stemming.',
       ),
     importer: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Importer company name. Matches recalls whose importer names contain every word, in any order. Use when searching for recalls by the company that brought the product into the US.',
+        'Importer company name. Matches recalls whose importer names contain every word, in any order, each as a case-insensitive substring with no stemming. Use when searching for recalls by the company that brought the product into the US.',
       ),
     distributor: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Distributor company name, e.g. "Walmart", "Costco". Matches recalls whose distributor names contain every word, in any order — a role distinct from retailer and importer, and listed on far fewer recalls.',
+        'Distributor company name, e.g. "Walmart", "Costco". Matches recalls whose distributor names contain every word, in any order, each as a case-insensitive substring with no stemming — a role distinct from retailer and importer, and listed on far fewer recalls.',
       ),
     title_search: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Keyword search within the recall title, e.g. "chandelier", "space heater", "Graco crib". Matches titles containing every word, in any order. CPSC titles name the brand, the product, and the hazard, which makes this the highest-signal single filter for most searches.',
+        'Keyword search within the recall title, e.g. "chandelier", "space heater", "Graco crib". Matches titles containing every word, in any order, each as a case-insensitive substring with no stemming. CPSC titles name the brand, the product, and the hazard, which makes this the highest-signal single filter for most searches.',
       ),
     description_search: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Keyword search within the recall description only — not the title, hazard text, or remedy instructions; matches descriptions containing every word, in any order. Use for product details not captured in product_name — model numbers, colors, sale channels. For hazard concepts, prefer hazard_search; for the recall headline, prefer title_search.',
+        'Keyword search within the recall description only — not the title, hazard text, or remedy instructions; matches descriptions containing every word, in any order, each as a case-insensitive substring with no stemming. Use for product details not captured in product_name — model numbers, colors, sale channels. For hazard concepts, prefer hazard_search; for the recall headline, prefer title_search.',
       ),
     remedy: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Keyword search within the free-text remedy instructions, e.g. "repair", "refund", "firmware update"; matches instructions containing every word, in any order. This searches the remedy text, not the remedy_options categories — "repair" matches records whose remedy_options list only "Refund" but whose instructions describe a free repair kit. Combines with the other filters using AND; use hazard_search instead to match remedy text as one of several fields.',
+        'Keyword search within the free-text remedy instructions, e.g. "repair", "refund", "firmware update"; matches instructions containing every word, in any order, each as a case-insensitive substring with no stemming. This searches the remedy text, not the remedy_options categories — "repair" matches records whose remedy_options list only "Refund" but whose instructions describe a free repair kit. Combines with the other filters using AND; use hazard_search instead to match remedy text as one of several fields.',
       ),
     hazard_search: z
       .string()
       .max(500)
       .optional()
       .describe(
-        'Hazard or safety-concept keyword, e.g. "fire", "choking", "burn", "tip-over dresser". Matches when every word appears in the hazard descriptions, product names, or remedy instructions — each word in any of the three, in any order, case-insensitive. The filter to use for hazard types; combine it with another filter to narrow a broad hazard.',
+        'Hazard or safety-concept keyword, e.g. "fire", "choking", "burn", "tip-over dresser". Matches when every word appears in the hazard descriptions, product names, or remedy instructions — each word in any of the three, in any order, as a case-insensitive substring with no stemming. The filter to use for hazard types; combine it with another filter to narrow a broad hazard.',
       ),
     date_start: z
       .union([z.literal(''), z.iso.date().describe('ISO 8601 date: "YYYY-MM-DD".')])
@@ -453,10 +468,10 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       .number()
       .int()
       .min(1)
-      .max(200)
+      .max(LIMIT_CEILING)
       .default(20)
       .describe(
-        'Maximum number of recalls to return on this page. Defaults to 20. A page returns fewer when it reaches the 64,000-byte response size budget; has_more then says more remain.',
+        `Maximum number of recalls to return on this page. Defaults to 20. A page holds at most ${PAGE_CEILING}: a larger limit, up to ${LIMIT_CEILING.toLocaleString('en-US')}, returns ${PAGE_CEILING} with a notice giving the offset to continue from. A page returns fewer when it reaches the 64,000-byte response size budget; has_more then says more remain.`,
       ),
     offset: z
       .number()
@@ -487,7 +502,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
     cpsc_jurisdiction: z
       .string()
       .describe(
-        'Which products CPSC covers and which agencies cover the rest — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
+        'Which products CPSC covers, including those near the lines of other agencies, and which agencies own food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF), with a reminder to search here before routing such a product away.',
       ),
     source_note: z
       .string()
@@ -506,7 +521,7 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       .string()
       .optional()
       .describe(
-        'Present when the page needs explaining: zero matches (with which criterion to relax), an offset past the last match, or a page cut short by the response size budget (with the offset to continue from).',
+        `Present when the page needs explaining: zero matches (with which criterion to relax), an offset past the last match, a page cut short by the response size budget, or a page held to ${PAGE_CEILING} recalls under a larger limit (each with the offset to continue from).`,
       ),
   },
 
@@ -634,7 +649,8 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
       : matchedBeforeHazard;
 
     const total_found = matched.length;
-    const window = matched.slice(input.offset, input.offset + input.limit).map(toSearchRecall);
+    const pageSize = Math.min(input.limit, PAGE_CEILING);
+    const window = matched.slice(input.offset, input.offset + pageSize).map(toSearchRecall);
     const effectiveQuery = [
       ...filters.map((f) => `${f.key}=${JSON.stringify(f.value)}`),
       ...dateBounds.map((d) => `${d.key}=${d.value}`),
@@ -649,29 +665,38 @@ export const cpscSearchRecalls = tool('cpsc_search_recalls', {
 
     /**
      * The overhead reserves the page's worst case: the longest footer (truncated, with a
-     * next-page offset for a full limit of records) and a budget notice at the same counts.
+     * next-page offset for a full page of records) and the longest notice a short page can
+     * carry at the same counts.
      */
     const overhead = pageOverheadBytes(
       { ...page, recalls: [], truncated: false, has_more: false },
-      renderFooter({ ...page, truncated: true, has_more: true }, input.limit),
+      renderFooter({ ...page, truncated: true, has_more: true }, pageSize),
       {
         effectiveQuery,
-        notice: budgetCutNotice(input.limit, input.limit, input.offset + input.limit),
+        notice: shortPageNoticeBound(input.limit, PAGE_CEILING, input.offset),
       },
     );
     const returned = countWithinBudget(window, renderRecallBlock, overhead);
     const recalls = window.slice(0, returned);
     const has_more = input.offset + returned < total_found;
 
-    /** One notice slot, last-wins: the three page states are mutually exclusive. */
+    /**
+     * One notice slot: zero matches and an offset past the end return no records, and a
+     * short page returns some, so at most one state applies.
+     */
     const notice =
       total_found === 0
         ? zeroMatchNotice(filters, matchedBeforeHazard.length, dateBounds.length > 0)
         : input.offset >= total_found
           ? `Offset ${input.offset} is past the last of the ${total_found} matching recall${total_found === 1 ? '' : 's'}, so this page is empty. Use an offset below ${total_found}.`
-          : returned < window.length
-            ? budgetCutNotice(returned, input.limit, input.offset + returned)
-            : undefined;
+          : shortPageNotice({
+              returned,
+              windowLength: window.length,
+              requested: input.limit,
+              pageCeiling: PAGE_CEILING,
+              offset: input.offset,
+              hasMore: has_more,
+            });
 
     ctx.enrich.echo(effectiveQuery);
     if (notice) ctx.enrich.notice(notice);

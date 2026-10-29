@@ -11,8 +11,17 @@ import { normalizeRecall } from './normalize-text.js';
 import type { CpscSearchParams, RawRecall } from './types.js';
 
 const BASE_URL = 'https://www.saferproducts.gov/RestWebServices/Recall';
-/** Request timeout: 30 s. The API returns full datasets; allow enough time. */
+/**
+ * Per-attempt timeout: 30 s, twice the slowest cold response measured (the full 27.7 MB
+ * dataset in 15 s). Each attempt gets the lesser of this and what remains of `DEADLINE_MS`.
+ */
 const TIMEOUT_MS = 30_000;
+/**
+ * Total budget for one call's upstream work — every attempt, every backoff, and the
+ * reordered provider-failure query. 50 s leaves 10 s under the MCP SDK's default 60 s
+ * request timeout, so the caller gets this server's classified error, not a transport timeout.
+ */
+const DEADLINE_MS = 50_000;
 /** Upper bound on how much of the upstream error text is echoed back in the thrown message. */
 const ERROR_ROW_MESSAGE_LIMIT = 200;
 
@@ -27,6 +36,12 @@ type QueryParams = Partial<Record<string, string>>;
 
 /** One fetch's outcome: the records, or the message of a provider-failure error row. */
 type FetchOutcome = { recalls: RawRecall[] } | { providerFailure: string };
+
+/**
+ * A lookup by recall number: the record carrying exactly that number, or — when none
+ * does — the numbers of the other recalls CPSC returned, sorted.
+ */
+export type RecallLookup = { recall: RawRecall } | { recall: null; otherNumbers: string[] };
 
 /**
  * True when a row is CPSC's error row rather than a recall record.
@@ -68,12 +83,17 @@ export class CpscRecallService {
   }
 
   /**
-   * Fetch a single recall by recall number. Returns `null` when no matching record
-   * exists (API returns empty array for unknown numbers).
+   * Fetch a single recall by recall number. CPSC's `RecallNumber` filter is a
+   * case-insensitive substring match returned in no stable order — the bare base of a
+   * 1998–2001 lettered family (`01160`) returns its separate lettered recalls — so only a
+   * record whose number equals the requested one, compared case-insensitively, is returned.
    */
-  async getByNumber(recallNumber: string, ctx: Context): Promise<RawRecall | null> {
+  async getByNumber(recallNumber: string, ctx: Context): Promise<RecallLookup> {
     const results = await this.fetchRecalls({ RecallNumber: recallNumber }, ctx);
-    return results[0] ?? null;
+    const requested = recallNumber.toLowerCase();
+    const recall = results.find((r) => r.RecallNumber.toLowerCase() === requested);
+    if (recall) return { recall };
+    return { recall: null, otherNumbers: results.map((r) => r.RecallNumber).sort() };
   }
 
   /**
@@ -102,14 +122,18 @@ export class CpscRecallService {
    * `format` moved last: CPSC serves a failed query's error row from a cache keyed on the
    * exact query string, so repeating the URL keeps failing while the reordered one misses
    * the cache. A second provider failure surfaces as retryable.
+   *
+   * Both fetches share one `DEADLINE_MS` budget, measured from here: the reordered query
+   * gets what the first left, not a fresh one.
    */
   private async fetchRecalls(params: QueryParams, ctx: Context): Promise<RawRecall[]> {
-    let outcome = await this.fetchOnce(this.buildUrl(params), ctx);
+    const deadlineAt = Date.now() + DEADLINE_MS;
+    let outcome = await this.fetchOnce(this.buildUrl(params), deadlineAt, ctx);
     if ('providerFailure' in outcome) {
       ctx.log.info('CPSC reported a provider failure; retrying with the query reordered', {
         upstreamMessage: outcome.providerFailure,
       });
-      outcome = await this.fetchOnce(this.buildUrl(params, true), ctx);
+      outcome = await this.fetchOnce(this.buildUrl(params, true), deadlineAt, ctx);
     }
     if ('providerFailure' in outcome) {
       throw serviceUnavailable(`CPSC reported a temporary failure: ${outcome.providerFailure}`, {
@@ -120,14 +144,18 @@ export class CpscRecallService {
   }
 
   /**
-   * One fetch of `url` under the retry boundary. A provider-failure row comes back as a
-   * value rather than a throw, so `withRetry` never repeats a URL CPSC answers from cache.
+   * One fetch of `url` under the retry boundary, bounded by the epoch-ms `deadlineAt`.
+   * A provider-failure row comes back as a value rather than a throw, so `withRetry`
+   * never repeats a URL CPSC answers from cache.
+   *
+   * Expiry rejects with `withRetry`'s `Timeout` (`data.reason: 'retry_deadline_exceeded'`);
+   * a caller abort still rejects as the cancellation.
    */
-  private fetchOnce(url: string, ctx: Context): Promise<FetchOutcome> {
+  private fetchOnce(url: string, deadlineAt: number, ctx: Context): Promise<FetchOutcome> {
     return withRetry(
-      async () => {
-        const response = await fetchWithTimeout(url, TIMEOUT_MS, ctx, {
-          signal: ctx.signal,
+      async ({ signal, remainingMs }) => {
+        const response = await fetchWithTimeout(url, Math.min(TIMEOUT_MS, remainingMs), ctx, {
+          signal,
         });
         const text = await response.text();
         // Some upstream error pages return HTTP 200 with HTML.
@@ -170,6 +198,7 @@ export class CpscRecallService {
         context: ctx,
         baseDelayMs: 500,
         signal: ctx.signal,
+        deadlineMs: Math.max(0, deadlineAt - Date.now()),
       },
     );
   }

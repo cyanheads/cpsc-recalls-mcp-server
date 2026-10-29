@@ -143,10 +143,12 @@ describe('advertised text', () => {
       hazard_search: ['hazard descriptions', 'product names', 'remedy instructions'],
     };
     for (const [filter, fields] of Object.entries(fieldNamed)) {
-      it(`says which recall fields ${filter} matches, and that every word must appear`, () => {
+      it(`says which recall fields ${filter} matches, that every word must appear, and how a word matches`, () => {
         const text = inputDescriptions[filter]?.description ?? '';
         for (const field of fields) expect(text).toContain(field);
         expect(text).toContain('every word');
+        expect(text).toContain('case-insensitive substring');
+        expect(text).toContain('no stemming');
       });
     }
 
@@ -156,6 +158,9 @@ describe('advertised text', () => {
       expect(text).toContain('cpsc_get_recent');
       expect(text).toContain('AND');
       expect(text).toContain('every one of its words, in any order');
+      expect(text).toContain('case-insensitive substring');
+      expect(text).toContain('no stemming');
+      expect(text).toContain('"batter" finds battery and batteries');
       expect(text).toContain('offset');
       expect(text).toContain('has_more');
       expect(text).toContain('64,000-byte');
@@ -226,7 +231,7 @@ describe('advertised text', () => {
     beforeEach(() => {
       vi.mocked(getCpscRecallService).mockReturnValue({
         search: vi.fn().mockResolvedValue([makeRaw()]),
-        getByNumber: vi.fn().mockResolvedValue(makeRaw()),
+        getByNumber: vi.fn().mockResolvedValue({ recall: makeRaw() }),
         getRecent: vi.fn().mockResolvedValue([makeRaw()]),
       } as never);
     });
@@ -252,8 +257,72 @@ describe('advertised text', () => {
       }
       expect(recent?.jurisdiction).toBe(recall?.jurisdiction);
       expect(search?.jurisdiction).toBe(
-        `${recall?.jurisdiction} For those categories, use the appropriate server.`,
+        `${recall?.jurisdiction} Search here before routing a product near one of those lines to another agency.`,
       );
+    });
+
+    /** Products CPSC recalls that sit next to another agency's domain. */
+    const EDGE_PRODUCTS = [
+      'child-resistant packaging',
+      'ATVs',
+      'snowmobiles',
+      'bicycle tires',
+      'gun safes and locks',
+    ];
+    const AGENCIES = ['(FDA)', '(NHTSA)', '(USCG)', '(EPA)', '(ATF)'];
+    /** A blanket exclusion of a category CPSC partly covers. */
+    const EXCLUSION = /does not cover|consumer products only|not in this database/i;
+
+    it('names the products CPSC covers next to other agencies, and still names those agencies', async () => {
+      for (const { jurisdiction } of await wire()) {
+        for (const term of [...EDGE_PRODUCTS, ...AGENCIES]) expect(jurisdiction).toContain(term);
+        expect(jurisdiction).not.toMatch(EXCLUSION);
+      }
+    });
+
+    it('carries the one-sentence form in every description and the instructions', () => {
+      const texts = [serverInstructions(), ...tools.map((def) => def.description)];
+      for (const text of texts) {
+        expect(text).toContain('CPSC jurisdiction: consumer products, including');
+        for (const term of [...EDGE_PRODUCTS, ...AGENCIES]) expect(text).toContain(term);
+      }
+    });
+
+    it('never excludes drugs, tires, vehicles, or firearms outright in advertised text', () => {
+      const exclusions = advertisedStrings().filter(([, text]) => EXCLUSION.test(text));
+      expect(exclusions).toEqual([]);
+    });
+  });
+
+  describe('recall-number format', () => {
+    it('ties the letter suffix to some 1998–2001 records and the plain form to no era', () => {
+      const misstated = advertisedStrings().filter(([, text]) =>
+        /\b2002(?:\+|–| onward)|modern records|letter[^.]*for 1998–2001 (?:historical )?records/.test(
+          text,
+        ),
+      );
+      expect(misstated).toEqual([]);
+
+      const notFound = cpscGetRecall.errors?.find((entry) => entry.reason === 'not_found');
+      for (const text of [
+        cpscGetRecall.input.shape.recall_number.description ?? '',
+        cpscSearchRecalls.output.shape.recalls.element.shape.recall_number.description ?? '',
+        notFound?.recovery ?? '',
+      ]) {
+        expect(text).toContain('some 1998–2001 records');
+        expect(text).toContain('25043');
+        expect(text).toContain('99003a');
+      }
+    });
+
+    it('accepts plain and lettered numbers from any era and rejects other shapes', () => {
+      const recallNumber = cpscGetRecall.input.shape.recall_number;
+      for (const accepted of ['99003a', '01160c', '99162', '83028']) {
+        expect(recallNumber.safeParse(accepted).success).toBe(true);
+      }
+      for (const rejected of ['990032', '99003e']) {
+        expect(recallNumber.safeParse(rejected).success).toBe(false);
+      }
     });
   });
 

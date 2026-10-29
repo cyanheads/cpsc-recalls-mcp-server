@@ -1,7 +1,8 @@
 /**
  * @fileoverview Response size budget shared by the list tools. A page keeps the leading
  * records whose charges fit under one byte cap, applied to the serialized
- * `structuredContent` and to the `content[]` text alike.
+ * `structuredContent` and to the `content[]` text alike. Also the hard `limit` ceiling and
+ * the notices for a page that returns fewer records than requested.
  * @module mcp-server/tools/response-budget
  */
 
@@ -10,6 +11,13 @@
  * `content[]` text including the enrichment trailer.
  */
 export const RESPONSE_BUDGET_BYTES = 64_000;
+
+/**
+ * Hard ceiling on `limit`, against absurd input. Each tool also has a page ceiling below it;
+ * a `limit` between the two is served at the page ceiling, with a notice when that ended
+ * the page.
+ */
+export const LIMIT_CEILING = 10_000;
 
 /** UTF-8 byte length of `text`. */
 function utf8Bytes(text: string): number {
@@ -106,4 +114,58 @@ export function pageOverheadBytes(
 /** The notice for a page the budget ended before `requested` records. */
 export function budgetCutNotice(returned: number, requested: number, nextOffset: number): string {
   return `Returned ${returned} of the ${requested} requested recalls: this page reached the ${RESPONSE_BUDGET_BYTES.toLocaleString('en-US')}-byte response size budget. Continue with offset ${nextOffset} for the rest.`;
+}
+
+/** The notice for a page the page ceiling ended under a larger `requested` limit. */
+export function pageCeilingNotice(
+  requested: number,
+  pageCeiling: number,
+  nextOffset: number,
+): string {
+  return `Returned ${pageCeiling} of the ${requested} requested recalls: a page holds at most ${pageCeiling} recalls. Continue with offset ${nextOffset} for the rest.`;
+}
+
+/** Where a non-empty page stopped, as the notice selection needs it. */
+interface ShortPage {
+  hasMore: boolean;
+  offset: number;
+  pageCeiling: number;
+  /** The caller's `limit`. */
+  requested: number;
+  /** Records the page returned. */
+  returned: number;
+  /** Records in the offset window before the budget: `min(requested, pageCeiling)` or fewer at the end. */
+  windowLength: number;
+}
+
+/**
+ * The notice for a page that stopped short of the caller's `limit` with records left: the
+ * budget cut it, or the page ceiling ended it under a larger `limit`. Undefined when the
+ * page needs none — the window was whole and either `limit` was within the ceiling or
+ * nothing remains past it. Never both: a budget cut returns fewer than the window, a
+ * ceiling-ended page returns the whole window.
+ */
+export function shortPageNotice(page: ShortPage): string | undefined {
+  const { returned, windowLength, requested, pageCeiling, offset, hasMore } = page;
+  if (returned < windowLength) return budgetCutNotice(returned, requested, offset + returned);
+  if (requested > pageCeiling && returned === pageCeiling && hasMore) {
+    return pageCeilingNotice(requested, pageCeiling, offset + returned);
+  }
+  return;
+}
+
+/**
+ * The longest notice {@link shortPageNotice} can return for a page of this `requested`,
+ * `pageCeiling`, and `offset`, for the page overhead to reserve: each notice sized at a
+ * full page, so no count it names is longer.
+ */
+export function shortPageNoticeBound(
+  requested: number,
+  pageCeiling: number,
+  offset: number,
+): string {
+  const pageSize = Math.min(requested, pageCeiling);
+  const budget = budgetCutNotice(pageSize, requested, offset + pageSize);
+  const ceiling = pageCeilingNotice(requested, pageCeiling, offset + pageSize);
+  return utf8Bytes(ceiling) > utf8Bytes(budget) ? ceiling : budget;
 }

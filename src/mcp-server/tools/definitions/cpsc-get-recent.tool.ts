@@ -9,16 +9,18 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
-  budgetCutNotice,
   countWithinBudget,
+  LIMIT_CEILING,
   pageOverheadBytes,
+  shortPageNotice,
+  shortPageNoticeBound,
 } from '@/mcp-server/tools/response-budget.js';
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 import type { RawRecall } from '@/services/cpsc-recall/types.js';
 
 /** Static jurisdiction note included in every response. */
 const JURISDICTION =
-  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).';
+  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing — including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks. Food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.';
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
@@ -26,6 +28,9 @@ const SOURCE_NOTE =
 
 /** The longest window `days` accepts. */
 const MAX_DAYS = 365;
+
+/** Most recalls one page holds; a larger `limit` is served as this many. */
+const PAGE_CEILING = 100;
 
 /** Format a Date as "YYYY-MM-DD". */
 function toIsoDate(d: Date): string {
@@ -143,7 +148,7 @@ function renderFooter(page: { source_note: string; cpsc_jurisdiction: string }):
 export const cpscGetRecent = tool('cpsc_get_recent', {
   title: 'Get Recent CPSC Recalls',
   description:
-    'Fetch the most recent CPSC consumer product recalls, newest-first, from a window of the last N days (default 30, up to 365). Use for "what\'s been recalled lately?" or a product safety feed; to find recalls by product, brand, hazard, or an older date range, use cpsc_search_recalls. Page past limit with offset: narrowing days cannot page, because the window is anchored to today and shrinking it drops the oldest recalls rather than advancing past the newest. A page returns fewer than limit recalls when it reaches the 64,000-byte response size budget; has_more and the notice give the offset to continue from. Pass a recall_number to cpsc_get_recall for the full record. CPSC jurisdiction: consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are covered by other agencies.',
+    'Fetch the most recent CPSC consumer product recalls, newest-first, from a window of the last N days (default 30, up to 365). Use for "what\'s been recalled lately?" or a product safety feed; to find recalls by product, brand, hazard, or an older date range, use cpsc_search_recalls. Page past limit with offset: narrowing days cannot page, because the window is anchored to today and shrinking it drops the oldest recalls rather than advancing past the newest. A page returns fewer than limit recalls when it reaches the 64,000-byte response size budget; has_more and the notice give the offset to continue from. Pass a recall_number to cpsc_get_recall for the full record. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
   annotations: { readOnlyHint: true },
 
   input: z.object({
@@ -160,10 +165,10 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       .number()
       .int()
       .min(1)
-      .max(100)
+      .max(LIMIT_CEILING)
       .default(20)
       .describe(
-        'Maximum number of recalls to return. Defaults to 20. A page returns fewer when it reaches the 64,000-byte response size budget.',
+        `Maximum number of recalls to return. Defaults to 20. A page holds at most ${PAGE_CEILING}: a larger limit, up to ${LIMIT_CEILING.toLocaleString('en-US')}, returns ${PAGE_CEILING} with a notice giving the offset to continue from. A page returns fewer when it reaches the 64,000-byte response size budget.`,
       ),
     offset: z
       .number()
@@ -203,7 +208,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     cpsc_jurisdiction: z
       .string()
       .describe(
-        'Which products CPSC covers and which agencies cover the rest — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
+        'Which products CPSC covers, including those near the lines of other agencies, and which agencies own food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF).',
       ),
     source_note: z
       .string()
@@ -217,7 +222,7 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
       .string()
       .optional()
       .describe(
-        'Present when the page needs explaining: a window with no recalls (with a larger days to try), an offset past the last recall, or a page cut short by the response size budget (with the offset to continue from).',
+        `Present when the page needs explaining: a window with no recalls (with a larger days to try), an offset past the last recall, a page cut short by the response size budget, or a page held to ${PAGE_CEILING} recalls under a larger limit (each with the offset to continue from).`,
       ),
   },
 
@@ -271,7 +276,8 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
     }
 
     const total_found = raw.length;
-    const window = raw.slice(input.offset, input.offset + input.limit).map(toRecentRecall);
+    const pageSize = Math.min(input.limit, PAGE_CEILING);
+    const window = raw.slice(input.offset, input.offset + pageSize).map(toRecentRecall);
     const page = {
       period,
       total_found,
@@ -282,18 +288,22 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
 
     /**
      * The overhead reserves the page's worst case: the longest header (truncated, with a
-     * next-page offset for a full limit of records) and a budget notice at the same counts.
+     * next-page offset for a full page of records) and the longest notice a short page can
+     * carry at the same counts.
      */
     const overhead = pageOverheadBytes(
       { ...page, recalls: [], truncated: false, has_more: false },
-      `${renderHeader({ ...page, truncated: true, has_more: true }, input.limit)}\n${renderFooter(page)}`,
-      { notice: budgetCutNotice(input.limit, input.limit, input.offset + input.limit) },
+      `${renderHeader({ ...page, truncated: true, has_more: true }, pageSize)}\n${renderFooter(page)}`,
+      { notice: shortPageNoticeBound(input.limit, PAGE_CEILING, input.offset) },
     );
     const returned = countWithinBudget(window, renderRecallBlock, overhead);
     const recalls = window.slice(0, returned);
     const has_more = input.offset + returned < total_found;
 
-    /** One notice slot, last-wins: the three page states are mutually exclusive. */
+    /**
+     * One notice slot: an empty window and an offset past the end return no records, and a
+     * short page returns some, so at most one state applies.
+     */
     const notice =
       total_found === 0
         ? `No CPSC recalls were issued between ${dateStart} and ${dateEnd}.${
@@ -303,9 +313,14 @@ export const cpscGetRecent = tool('cpsc_get_recent', {
           }`
         : input.offset >= total_found
           ? `Offset ${input.offset} is past the last of the ${total_found} recall${total_found === 1 ? '' : 's'} in this window, so this page is empty. Use an offset below ${total_found}.`
-          : returned < window.length
-            ? budgetCutNotice(returned, input.limit, input.offset + returned)
-            : undefined;
+          : shortPageNotice({
+              returned,
+              windowLength: window.length,
+              requested: input.limit,
+              pageCeiling: PAGE_CEILING,
+              offset: input.offset,
+              hasMore: has_more,
+            });
     if (notice) ctx.enrich.notice(notice);
 
     ctx.log.info('Recent recalls fetched', {

@@ -7,11 +7,14 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
-import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
+import {
+  getCpscRecallService,
+  type RecallLookup,
+} from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** Static jurisdiction note included in every response. */
 const JURISDICTION =
-  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing. Does NOT cover: food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).';
+  'CPSC covers consumer products — toys, electronics, furniture, appliances, tools, clothing — including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks. Food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.';
 
 /** Static provenance caveat included in every response. */
 const SOURCE_NOTE =
@@ -42,7 +45,7 @@ function asSourceText(text: string): string {
 export const cpscGetRecall = tool('cpsc_get_recall', {
   title: 'Get CPSC Recall Detail',
   description:
-    'Fetch the full record for one CPSC recall by recall number: hazard description, remedy instructions, every product variant, UPCs, incident and injury reports, images, and the official CPSC recall page URL. Get a recall number from cpsc_search_recalls or cpsc_get_recent. CPSC jurisdiction: consumer products only — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) are covered by other agencies.',
+    'Fetch the full record for one CPSC recall by recall number: hazard description, remedy instructions, every product variant, UPCs, incident and injury reports, images, and the official CPSC recall page URL. Get a recall number from cpsc_search_recalls or cpsc_get_recent. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -50,10 +53,10 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       .string()
       .regex(
         /^\d{5}([a-d])?$/,
-        'A CPSC recall number is 5 digits, e.g. "25043", or 5 digits plus a letter a–d for 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent.',
+        'A CPSC recall number is 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent.',
       )
       .describe(
-        'CPSC recall number: 5 digits for 2002–present records, e.g. "25043", or 5 digits plus a letter a–d for 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent results.',
+        'CPSC recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent results.',
       ),
   }),
 
@@ -156,7 +159,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     cpsc_jurisdiction: z
       .string()
       .describe(
-        'Which products CPSC covers and which agencies cover the rest — food/drugs (FDA), motor vehicles/tires (NHTSA), boats (USCG), pesticides (EPA), firearms (ATF).',
+        'Which products CPSC covers, including those near the lines of other agencies, and which agencies own food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF).',
       ),
     source_note: z
       .string()
@@ -171,7 +174,7 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       code: JsonRpcErrorCode.NotFound,
       when: 'No recall exists with the given recall number',
       recovery:
-        'Verify the recall number (e.g. "25043" for modern records, "99003a" for 1998–2001 historical records). Use cpsc_search_recalls or cpsc_get_recent to find the correct number.',
+        'Verify the recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Use cpsc_search_recalls or cpsc_get_recent to find the correct number.',
     },
     {
       reason: 'upstream_error',
@@ -194,9 +197,9 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
     ctx.log.info('Fetching CPSC recall detail', { recall_number: input.recall_number });
 
     const svc = getCpscRecallService();
-    let raw: Awaited<ReturnType<typeof svc.getByNumber>>;
+    let lookup: RecallLookup;
     try {
-      raw = await svc.getByNumber(input.recall_number, ctx);
+      lookup = await svc.getByNumber(input.recall_number, ctx);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       if (err instanceof McpError && err.data?.retryable === false) {
@@ -207,9 +210,22 @@ export const cpscGetRecall = tool('cpsc_get_recall', {
       });
     }
 
-    if (!raw) {
+    if (lookup.recall === null) {
+      const others = lookup.otherNumbers.join(', ');
+      if (others) {
+        throw ctx.fail(
+          'not_found',
+          `No CPSC recall has the number "${input.recall_number}"; CPSC matched other recalls whose numbers contain it.`,
+          {
+            recovery: {
+              hint: `${others} are separate recalls, not parts of one recall — call cpsc_get_recall with the number you mean.`,
+            },
+          },
+        );
+      }
       throw ctx.fail('not_found', `No CPSC recall found with number "${input.recall_number}".`);
     }
+    const raw = lookup.recall;
 
     const hazards = raw.Hazards.filter((h) => h.Name).map((h) => ({ description: h.Name }));
     const products = raw.Products.map((p) => ({
