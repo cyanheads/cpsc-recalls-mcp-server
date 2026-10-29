@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-10-29
+
+Oversized list-tool limits are served at the page ceiling, search rows carry last_updated and distributors, cpsc_get_recall returns only the exact recall number, and upstream calls share a 50 s deadline.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-10-28
 
 Publishes the cpsc-recalls-guide Agent Skill as an MCP resource; mcp-ts-core moves to 0.13.18, which renders the search query echo as a code span and stops the HTTP transport from retaining memory on every request.
