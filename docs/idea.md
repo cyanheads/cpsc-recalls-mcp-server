@@ -51,7 +51,7 @@ cpsc_get_recent       — most recent recalls, optionally scoped by hazard or pr
 - **Lead with hazard + remedy.** The two things a person needs are "what's dangerous about it" and "what do I do" (refund/repair/replace + how to claim) — surface those first, ahead of the catalog of model numbers.
 - Match by **model/UPC**, not just product name — recalls scope to specific units/lots, so a brand match isn't a recall match. Make that distinction explicit so the agent doesn't over-warn.
 - Return recall images and the CPSC recall URL for human verification.
-- Coverage is **CPSC jurisdiction** — consumer products excluding food/drugs/cosmetics, vehicles/tires, boats, firearms, and pesticides (other agencies). State the boundaries so the agent routes correctly.
+- Coverage is **CPSC jurisdiction** — consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food, drugs, and cosmetics (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies. State the boundaries so the agent routes correctly.
 - Composes with food/drug recall sources (`openfda`) and vehicle recall sources (`nhtsa`) — together they answer "is this recalled?" across the whole consumer landscape; this server is the "everything else" piece.
 - Moonshot: a "household safety sweep" workflow — take a list of products/brands and check all three recall sources in one pass.
 

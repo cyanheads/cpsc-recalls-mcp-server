@@ -159,7 +159,7 @@ src/
   index.ts                              # createApp() entry point — registers tools, inits service
   mcp-server/
     tools/
-      response-budget.ts                # 64,000-byte page budget shared by the two list tools
+      response-budget.ts                # List tools' 64,000-byte page budget, 10,000 limit ceiling, short-page notices
       markdown-escape.ts                # Markdown escaping for CPSC text in content[]
       definitions/
         cpsc-search-recalls.tool.ts     # Search recalls by product, org, date
@@ -167,7 +167,7 @@ src/
         cpsc-get-recent.tool.ts         # Recent recalls feed (date window)
   services/
     cpsc-recall/
-      cpsc-recall-service.ts            # CPSC API client, init/accessor pattern
+      cpsc-recall-service.ts            # CPSC API client (50 s per-call deadline, exact recall-number match), init/accessor
       normalize-text.ts                 # CPSC HTML markup and character codes to plain text
       types.ts                          # Raw API and domain types
 ```
@@ -176,7 +176,7 @@ src/
 
 ## Naming
 
-**CPSC prose formatting:** retain `src/mcp-server/tools/markdown-escape.ts` for plain CPSC text: it leaves an address GFM autolinks unescaped, where the framework's CommonMark inline escaper would put a backslash inside the link. URL fields use the framework's `markdownLink` / `markdownImage`. The enrichment byte reservation in `response-budget.ts` models the framework trailer's rendering — code spans and fenced blocks sized past each value's backtick runs, `> `-quoted notice lines — and needs re-checking whenever the framework changes that trailer.
+**CPSC prose formatting:** retain `src/mcp-server/tools/markdown-escape.ts` for plain CPSC text, where the framework's CommonMark inline escaper would put a backslash inside an autolinked address. An address GFM autolinks stays bare only when it holds nothing to escape and no escaped `<` follows it; otherwise it renders as `markdownLink(span, href)` over GFM's own link span (href = the span, or `http://` + span for `www.`), with the characters GFM trims from its end escaped after the link (`? ! . , : * _ ~ " '`, an unbalanced `)`, an `&name;` entity, `;` — cmark-gfm's rule). An address GFM doesn't autolink, or whose href isn't `http(s)`, is escaped as text, and a `!` right before a link is escaped. URL fields use the framework's `markdownLink` / `markdownImage`. The enrichment byte reservation in `response-budget.ts` models the framework trailer's rendering — code spans and fenced blocks sized past each value's backtick runs, `> `-quoted notice lines — and needs re-checking whenever the framework changes that trailer.
 
 | What | Convention | Example |
 |:-----|:-----------|:--------|

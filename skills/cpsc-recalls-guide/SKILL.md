@@ -4,7 +4,7 @@ description: Find and confirm US consumer product recalls with the cpsc_* tools.
 license: Apache-2.0
 metadata:
   author: cyanheads
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -16,7 +16,7 @@ The jurisdiction note on every successful response names the agencies that own f
 ## Identifiers
 
 - **Recall number.** Comes from cpsc_search_recalls or cpsc_get_recent. Pass five digits with no separator; a hyphenated form such as `25-043` fails validation. The first two digits are almost always the federal fiscal year the recall was issued in, which starts October 1 (`27xxx` numbers begin in October 2026, `03064` was issued in late 2002). Use that to bound a date search when a number is all you have.
-- **Lettered numbers.** Some 1998–2001 releases are split into lettered records (`01160a`, `01160b`, `01160c`) that are unrelated recalls issued the same day. The bare base number is not a record, and cpsc_get_recall on it returns one of the lettered siblings instead of failing. Check that the returned recall number equals the one you asked for; to see every sibling, search with date_start and date_end both set to that day.
+- **Lettered numbers.** Some 1998–2001 releases are split into lettered records (`01160a`, `01160b`, `01160c`) that are unrelated recalls, usually issued the same day; three of the 50 families span two dates (`00026a` and `00026b` are 20 days apart). The bare base number is not a record: cpsc_get_recall on it fails with not_found, and the error's hint names every lettered sibling. Open the one that matches the user's product rather than treating the siblings as parts of one recall.
 - **Model numbers, serials, UPCs.** No filter matches them as fields. They live in the description text that cpsc_get_recall returns; see the unit-level gate below.
 
 ## Gates
@@ -35,7 +35,7 @@ The jurisdiction note on every successful response names the agencies that own f
 
 7. **units_recalled is narrative, not a count.** It is approximate ("About 61,000"), often adds Canadian or Mexican sales in parentheses, and on an expanded or re-announced recall it can cite or already include units from the earlier recall ("About 569,000 (In August 2018, 105,000 of the 569,000 blending containers and blade bases were previously recalled)"). Read the parenthetical before summing across recalls, and present totals as approximate.
 
-8. **Issue date and last-published date are separate axes.** cpsc_get_recent windows on issue date. A record CPSC republishes keeps its original issue date, so a recent window or an issue-date search misses it and updated_start and updated_end find it; 1998 recalls republished in October 2026 appear that way. Search rows don't carry the last-published date. cpsc_get_recall shows it as last_updated, but nothing says what changed.
+8. **Issue date and last-published date are separate axes.** cpsc_get_recent windows on issue date. A record CPSC republishes keeps its original issue date, so a recent window or an issue-date search misses it and updated_start and updated_end find it; 1998 recalls republished in October 2026 appear that way. cpsc_search_recalls rows and cpsc_get_recall carry the last-published date as last_updated, while cpsc_get_recent rows don't; nothing says what changed.
 
 ## Workflows
 
