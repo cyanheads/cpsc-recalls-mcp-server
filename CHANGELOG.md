@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.2](changelog/0.3.x/0.3.2.md) — 2026-11-21
+
+Search recalls by UPC, injury narrative, or classified remedy and look up recall numbers copied from CPSC notices.
+
 ## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-10-29
 
 Oversized list-tool limits are served at the page ceiling, search rows carry last_updated and distributors, cpsc_get_recall returns only the exact recall number, and upstream calls share a 50 s deadline.
