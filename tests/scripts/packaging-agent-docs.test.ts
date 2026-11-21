@@ -8,15 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { AGENT_DOC_ENTRY, filterAgentDocEntries } from '../../scripts/clean-mcpb.js';
-
-/**
- * Loaded by runtime URL rather than a static import: the script's fallback import of the
- * framework repository's own `src/mcp-server/skills.js` does not resolve in a server, so
- * a static import fails the typecheck.
- */
-const lintPackaging: { AGENT_DOC_ENTRY: RegExp } = await import(
-  new URL('../../scripts/lint-packaging.ts', import.meta.url).href
-);
+import * as lintPackaging from '../../scripts/lint-packaging.js';
 
 /** Bundle entries the server loads at runtime or publishes; none may be stripped. */
 const kept = [
@@ -25,6 +17,7 @@ const kept = [
   'node_modules/some-pkg/node_modules/@modelcontextprotocol/server/dist/ext/skills/index.js',
   'node_modules/@scope/pkg/node_modules/@modelcontextprotocol/server/dist/ext/skills/loader.js',
   'node_modules/some-pkg/dist/skills/runtime.js',
+  'node_modules/some-pkg/dist/AGENTS.md',
   'skills/recall-triage/SKILL.md',
   'dist/index.js',
 ];
@@ -33,6 +26,8 @@ const kept = [
 const stripped = [
   'node_modules/some-pkg/skills/foo/SKILL.md',
   'node_modules/some-pkg/skills/foo/reference.md',
+  'node_modules/some-pkg/CLAUDE.md',
+  'node_modules/@scope/pkg/node_modules/@other/pkg/AGENTS.md',
   'node_modules/@cyanheads/mcp-ts-core/framework-skills/add-tool/SKILL.md',
   'node_modules/@cyanheads/mcp-ts-core/framework-skills/techniques/references/outline-on-overflow.md',
   'node_modules/some-pkg/.claude/settings.json',
