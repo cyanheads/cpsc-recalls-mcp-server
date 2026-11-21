@@ -8,9 +8,9 @@ This records the design as reasoned before the build, kept for its rationale. Wh
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `cpsc_search_recalls` | Search consumer product recalls by product name, brand/manufacturer, retailer, hazard description, or date range. Primary lookup tool. | `product_name`, `manufacturer`, `retailer`, `hazard`, `date_start`, `date_end`, `limit` — as built, `hazard` is `hazard_search` (client-side) and the tool also takes `importer`, `description_search`, `title_search`, `distributor`, `remedy`, `updated_start`, `updated_end`, `offset` | `readOnlyHint`, `idempotentHint` |
+| `cpsc_search_recalls` | Search consumer product recalls with text, date, remedy category, and UPC filters. | `product_name`, `title_search`, `description_search`, `manufacturer`, `retailer`, `importer`, `distributor`, `hazard_search`, `remedy`, `remedy_option`, `injury_search`, `upc`, issue and last-published date bounds, `limit`, `offset` | `readOnlyHint`, `idempotentHint` |
 | `cpsc_get_recall` | Full detail for a single recall by recall number. Returns hazard, remedy, all product variants, incident reports, images, and the CPSC recall URL. | `recall_number` | `readOnlyHint`, `idempotentHint` |
-| `cpsc_get_recent` | Most recent CPSC recalls, ordered newest-first. Scoped to a date window (defaults last 30 days). Quick feed for "what's been recalled lately?" | `days`, `limit` | `readOnlyHint` |
+| `cpsc_get_recent` | Most recent CPSC recalls, ordered newest-first. Scoped to a date window (defaults last 30 days). Quick feed for "what's been recalled lately?" | `days`, `limit`, `offset` | `readOnlyHint` |
 
 ### Resources
 
@@ -20,7 +20,7 @@ None defined. All data is reachable via the tool surface. The search/get pattern
 
 ### Skills
 
-One published skill, `cpsc-recalls-guide` (`skills/cpsc-recalls-guide/SKILL.md`), served over MCP through `createApp({ skills: 'skills' })`. It exists because search-formulation gates and identifier quirks (one empty search is not "not recalled", substring matching, lettered recall numbers, model and UPC matching by description text, issue date versus last-published date) are too long and too cross-tool for tool descriptions, and an agent that skips them draws wrong conclusions from empty or partial results.
+One published skill, `cpsc-recalls-guide` (`skills/cpsc-recalls-guide/SKILL.md`), served over MCP through `createApp({ skills: 'skills' })`. It exists because search-formulation gates and identifier quirks (one empty search is not "not recalled", substring matching, printed and lettered recall numbers, model evidence, UPC matching, issue date versus last-published date) are too long and too cross-tool for tool descriptions, and an agent that skips them draws wrong conclusions from empty or partial results.
 
 ### Prompts
 
@@ -65,14 +65,14 @@ RecallNumber      string      5 digits, e.g. "25043"; a letter a–d follows on 
 RecallDate        string      ISO 8601, e.g. "2024-11-14T00:00:00"
 LastPublishDate   string      ISO 8601
 Title             string      recall title (always present)
-Description       string      full text description (always present)
+Description       string|null full text description (may be null or blank)
 URL               string      canonical CPSC recall page URL (always present)
 ConsumerContact   string|null contact instructions (occasionally null)
 SoldAtLabel       null        always null in practice — omit from output schema
 Products          array       see below
 Inconjunctions    array       [ { URL: string } ] — links to coordinated foreign-agency recalls; populated ~30% of records (verified: 95/305 in 2024, 185/616 in 2022–2023)
 Images            array       [ { URL: string, Caption: string } ] — always present (may be empty [])
-Injuries          array       [ { Name: string } ] — free-text narrative; "None reported" when no incidents
+Injuries          array       [ { Name: string } ] — free-text incident narrative, including reports, denials, or missing text
 Manufacturers     array       [ { Name: string, CompanyID: "" } ] — often empty (retailer/importer may be the primary org)
 Retailers         array       [ { Name: string, CompanyID: "" } ] — narrative text incl. date + price
 Importers         array       [ { Name: string, CompanyID: "" } ]
@@ -81,7 +81,7 @@ ManufacturerCountries array   [ { Country: string } ]
 ProductUPCs       array       [ { UPC: string } ] — sparse (~4% of records)
 Hazards           array       [ { Name: string, HazardType: "", HazardTypeID: "" } ] — Name is the narrative; HazardType/ID always empty
 Remedies          array       [ { Name: string } ] — free-text remedy instructions
-RemedyOptions     array       [ { Option: string } ] — enum: "Refund" | "Repair" | "Replace" | "Dispose" | "Label" | "New Instructions" — multiple options possible
+RemedyOptions     array       [ { Option: string } ] — source values may include multiple options, prose, or no entries
 ```
 
 `Products` array item:
@@ -96,7 +96,7 @@ NumberOfUnits     string      narrative, e.g. "About 2,500"
 
 **Multi-product recalls:** 817 of 9,828 records in the full dataset have 2+ entries in `Products`. The output schema must support `products` as an array (not a single object). When a multi-product recall also has `ProductUPCs`, those UPCs are at the recall level and cannot be attributed to individual products — callers should treat them as applying to the entire recall.
 
-**Key API surprise:** Model numbers are embedded in the `Description` text field of the recall, not in `Products[].Model`. The model/UPC matching use-case must search the recall description and title text, not a structured field. `ProductUPCs` is a structured array but sparse.
+**Model evidence:** `Products[].Model` is usually empty. Descriptions often carry model numbers, and titles, product names, image captions, and the official CPSC notice can also identify the model.
 
 ---
 
@@ -114,9 +114,10 @@ Single service, single endpoint. Init fetches nothing — the API is stateless p
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| _(none)_ | — | API is keyless; no config required |
+| `CPSC_CLAMP_LIMITS` | No | Defaults to `true`. Set to `false` to advertise and enforce the per-tool maximum in the list input schemas. |
+| `CPSC_NORMALIZE_RECALL_NUMBERS` | No | Defaults to `true`. Set to `false` to require the canonical recall number grammar at input. |
 
-The service layer uses the mcp-ts-core `fetchWithTimeout` + `withRetry` utilities. No server-specific config schema needed.
+The API is keyless. `src/index.ts` parses both settings at startup and uses them to select the advertised schemas.
 
 ---
 
@@ -146,10 +147,12 @@ Each is independently testable against the live API or a mock response fixture.
 - `Importer` → `importer`
 - `RecallDescription` → `description_search` (broader text search — searches the recall Description field)
 - `RecallDateStart` / `RecallDateEnd` → `date_start` / `date_end`
+- `Injury` → `injury_search` (one safe word narrows the fetch)
+- `RemedyOption` → canonical `remedy_option`
 
-**Note:** `Hazard` filter was verified to return 0 results even for common terms ("fire", "Fire") despite being a documented parameter. `RecallDescription` with hazard keywords is more reliable — use that for hazard-type filtering.
+**Note:** Upstream `Hazard` returned zero results in live probes for common terms. `hazard_search` checks hazard descriptions, product names, and remedy instructions locally. UPC matching also runs locally.
 
-**Input schema:**
+**Original input sketch:**
 ```ts
 z.object({
   product_name: z.string().optional()
@@ -171,9 +174,9 @@ z.object({
 })
 ```
 
-**Superseded:** `limit` accepts 1–10,000. A page holds at most 200 recalls, so a larger `limit` returns 200 with a notice naming the offset to continue from (see *Design Decisions*). Every text filter matches each of its words as a case-insensitive substring, with no stemming.
+**As built:** `limit` defaults to 20, caps at 500, and pages by `offset` (see *Design Decisions*). Every text filter matches each of its words as a case-insensitive substring, with no stemming. `remedy_option`, `upc`, and `injury_search` combine with the other criteria using AND before totals and pagination. Each counts as a search criterion and is included in the effective query when applied.
 
-**Output schema:**
+**Original output sketch:**
 ```ts
 z.object({
   recalls: z.array(z.object({
@@ -216,7 +219,7 @@ z.object({
 })
 ```
 
-**Superseded:** each row also carries `last_updated` (the last-published date) and `distributors`, with the same values `cpsc_get_recall` returns, from the same single upstream request. `recall_number` is described as five digits with a letter `a`–`d` on some 1998–2001 records, not split at 2002. `cpsc_jurisdiction` names the products CPSC recalls next to other agencies' lines, and its last sentence tells the caller to search here before routing such a product to another agency instead of pointing to another server.
+**As built:** Each search row also carries `last_updated`, `distributors`, and `injuries`, all from the same upstream response. `injuries` is joined source narrative, including any reports or denials. `recall_number` uses the canonical identifier. `cpsc_jurisdiction` describes the CPSC and other agencies' coverage.
 
 **Error contract:**
 ```ts
@@ -241,7 +244,7 @@ errors: [
 
 **Annotations:** `readOnlyHint: true`, `idempotentHint: true`
 
-**format() rendering:**
+**Rendering sketch:**
 Lead with hazard + remedy for each recall. Structure:
 ```
 ## [RecallNumber] — Title (RecallDate)
@@ -262,11 +265,11 @@ End with: `Showing N of M recalls. | CPSC covers: {jurisdiction note}`
 
 ### `cpsc_get_recall`
 
-**Purpose:** Full detail for a single recall by recall number. Use after `cpsc_search_recalls` to get complete information: full description, every product variant, all images, incident count, and the exact remedy claim process.
+**Purpose:** Full detail for a single recall by recall number. Use after `cpsc_search_recalls` to get complete information: full description, every product variant, all images, incident narrative, and the exact remedy claim process.
 
 **Upstream endpoint:** `GET https://www.saferproducts.gov/RestWebServices/Recall?format=json&RecallNumber={recall_number}`
 
-**Input schema:**
+**Original input sketch:**
 ```ts
 z.object({
   recall_number: z.string()
@@ -275,7 +278,7 @@ z.object({
 })
 ```
 
-**Output schema:**
+**Original output sketch:**
 ```ts
 z.object({
   recall_number: z.string().describe('Recall identifier.'),
@@ -342,11 +345,11 @@ errors: [
 ]
 ```
 
-**Superseded:** the `recall_number` text and the `not_found` recovery describe five digits with a letter `a`–`d` on some 1998–2001 records, not a 2002 split. The tool returns only the record whose number equals the request; for the bare base of a lettered family it fails `not_found` with a hint naming the separate lettered recalls (see *Design Decisions*). `cpsc_jurisdiction` names the products CPSC recalls next to other agencies' lines.
+**As built:** The default input accepts five digits with an optional hyphen after the first two, an optional case-insensitive `a`–`d` suffix, and surrounding whitespace. `25-036` becomes `25036` for one exact lookup, and output uses the upstream canonical recall number. `CPSC_NORMALIZE_RECALL_NUMBERS=false` restores the canonical input schema. A bare family base fails `not_found` with a hint naming the separate lettered recalls. Null and blank descriptions retain their source values and carry a data-quality note pointing to product names, image captions, and the official CPSC recall page for model evidence.
 
 **Annotations:** `readOnlyHint: true`, `idempotentHint: true`
 
-**format() rendering:**
+**Rendering sketch:**
 ```
 # [RecallNumber] — Title
 
@@ -356,7 +359,7 @@ errors: [
 
 ## Products Affected
 {for each product: name, units}
-**Note:** Model numbers are in the description text below if not listed here.
+{if description has text: Model numbers often appear in the description below.}
 {if upcs present: **UPCs (recall-level):** {upcs joined} — applies to this recall as a whole}
 
 ## Description
@@ -389,7 +392,7 @@ CPSC jurisdiction: {cpsc_jurisdiction}
 
 The no-filter endpoint returns all 9,828 records — too large to be useful. This tool always applies a date window, defaulting to the last 30 days.
 
-**Input schema:**
+**Original input sketch:**
 ```ts
 z.object({
   days: z.number().int().min(1).max(365).default(30)
@@ -399,9 +402,9 @@ z.object({
 })
 ```
 
-**Superseded:** `limit` accepts 1–10,000 and the tool also takes `offset`. A page holds at most 100 recalls, so a larger `limit` returns 100 with a notice naming the offset to continue from (see *Design Decisions*). `cpsc_jurisdiction` names the products CPSC recalls next to other agencies' lines.
+**As built:** `limit` defaults to 20, caps at 1,000, and pages by `offset` (see *Design Decisions*). `cpsc_jurisdiction` names the products CPSC recalls next to other agencies' lines.
 
-**Output schema:**
+**Original output sketch:**
 ```ts
 z.object({
   recalls: z.array(z.object({
@@ -440,7 +443,7 @@ errors: [
 
 **Annotations:** `readOnlyHint: true`
 
-**format() rendering:**
+**Rendering sketch:**
 ```
 # Recent CPSC Recalls — {start} to {end}
 
@@ -491,12 +494,12 @@ Each method:
 - `RecallDate` → strip time component, keep as ISO date string
 - `Hazards[].Name` → extract to `string[]`, drop empty `HazardType`/`HazardTypeID`
 - `Remedies[].Name` → join if multiple (observed: always exactly 1 entry in practice — never 0, never >1 across all probed data)
-- `RemedyOptions[].Option` → extract to `string[]` (multiple entries are common — up to 2 options per recall; never 0)
+- `RemedyOptions[].Option` → extract nonempty source values to `string[]`, including unclassified text
 - `Products[]` → map to `{ name, units: NumberOfUnits }` — drop empty Model/Type/CategoryID/Description (Description is always empty in full dataset)
 - `Manufacturers[].Name`, `Retailers[].Name`, etc. → extract name strings, drop empty CompanyID
 - `ManufacturerCountries[].Country` → extract to `string[]`
 - `ProductUPCs[].UPC` → extract to `string[]` at the **recall level** (not per-product — the API stores UPCs as a top-level array, unattributed to individual products)
-- `Injuries[].Name` → join if multiple (in practice always exactly one entry)
+- `Injuries[].Name` → join the source entries in search rows and detail. Missing narrative stays an empty string.
 - `Inconjunctions[].URL` → extract to `string[]`
 - `SoldAtLabel`, `HazardType`, `HazardTypeID`, `CategoryID`, `CompanyID`, `RecallID`, `Products[].Description` → **omit entirely** from output (always null/empty in full dataset)
 
@@ -511,6 +514,10 @@ Each method:
 | Brand/Org | `Manufacturer`, `Retailer`, `Importer` | Substring matches against separate arrays; try all three if a brand appears in multiple roles |
 | Hazard | `RecallDescription` | `Hazard` param is documented but verified to return 0 results — use description search with hazard keywords instead. **Superseded:** hazard matching is now the client-side `hazard_search` input over hazard names, product names, and remedy text; `description_search` remains the narrow `RecallDescription` filter |
 | Date | `RecallDateStart`, `RecallDateEnd` | ISO 8601 date strings |
+| Remedy instructions | `Remedy` | `remedy` matches every word against free-text instructions. |
+| Remedy category | `RemedyOption` | `remedy_option` trims and folds case to one of Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, or Inspect. The upstream substring filter narrows candidates, then the server checks an exact category in `RemedyOptions[].Option`. Blank input is unset. For unclassified records, search the instructions with `remedy`. |
+| Incident narrative | `Injury` | `injury_search` sends one safe word upstream and checks every word against `Injuries[].Name` locally. Read the narrative to distinguish a report from a denial. Missing narratives cannot match. |
+| UPC | Client-side | `upc` accepts 6–14 ASCII digits with optional single ASCII spaces or hyphens between digits. It matches complete numeric candidates from structured UPCs and descriptions. Full-code comparisons ignore leading zero padding, while suffix comparisons preserve the caller's digits. A source candidate may exceed 14 digits. Confirm description candidates in the full recall and fall back to brand and product search when coverage is sparse. |
 
 ---
 
@@ -518,7 +525,7 @@ Each method:
 
 1. **No pagination** — the API returns all matching records at once. For broad queries (e.g., `Retailer=Walmart` returns 476 records), the tool applies a client-side `limit`. Agents that need the full set should narrow by date range. **Superseded:** the upstream API still has no pagination, but `cpsc_search_recalls` and `cpsc_get_recent` take an `offset` and report `has_more`, so the full matching set is reachable by paging the client-side window instead of guessing a date boundary.
 
-2. **`Products[].Model` is almost always empty** — model numbers are embedded in the recall `Description` text rather than a structured field. Matching by specific model number requires description text search (`description_search`), not a dedicated `model` parameter. The design note to "match by model/UPC" is partially satisfied: UPCs are structured (when present); model matching depends on description search. Make this explicit in the tool description so agents don't assume a structured model lookup is possible.
+2. **`Products[].Model` is usually empty**. Use `description_search` or `title_search` to find model text and open the full recall for product names, image captions, and the official CPSC notice.
 
 3. **`Hazard` filter doesn't work** — verified against the live API: `Hazard=fire` and `Hazard=Fire` both return 0 results despite being a documented parameter. Hazard-type filtering must use `RecallDescription` with hazard keywords. **Superseded:** the upstream param is still dead, but hazard filtering no longer routes through `RecallDescription` — `hazard_search` matches client-side against hazard names, product names, and remedy text.
 
@@ -574,18 +581,18 @@ No tool makes more than one upstream call. The API design makes multi-call workf
 | `cpsc_jurisdiction` in every output | Every response includes the jurisdiction boundary string. Agents answering product-safety questions need to know when to route to `openfda` or `nhtsa`. Embedding it in the response (not just the description) ensures it reaches both `structuredContent` and `content[]` surfaces. **Superseded (wording):** the note no longer says CPSC does not cover drugs, tires, vehicles, or firearms, since CPSC recalls child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks, and an agent reading the old note literally routed those away. It names those products as CPSC's and still names FDA, NHTSA, USCG, EPA, and ATF; the search copy's extra sentence tells the caller to search here before routing such a product to another agency. |
 | UPCs at recall level, not per-product | The API's `ProductUPCs` array is at the recall level (not nested under `Products`). Verified with 9 multi-product recalls that also have UPCs — all UPCs appear without per-product attribution. UPCs are surfaced as a top-level recall field in output; agents are told attribution is ambiguous for multi-product recalls. |
 | No `Importer` exposed as separate search input from `cpsc_search_recalls` | Added `importer` as an optional input alongside `manufacturer` and `retailer`. Importers are often the primary responsible party (especially for consumer goods from Asia) and are a separate filterable field on the API. Useful to expose since many recalls have empty `Manufacturers` but populated `Importers`. |
-| No DataCanvas / MirrorService | 9,828 total records, ~300 per year — small enough that filtered queries fit comfortably in context. The API is fast enough (single GET) that a live query per request is fine. No need for a local mirror or analytical canvas. **Superseded (rationale only):** a filtered result does not fit in context by row count alone — a 200-record search page measured 376 KB, and the heaviest record is over 7× the median — so the list tools cap each page at 64,000 bytes (see *Response size budget*). Live per-request queries still stand; no mirror or canvas was added. |
-| Client-side limit, not upstream | The API offers no `limit`/`offset` — returns all matching records. The server fetches all matches and slices. `total_found` and `truncated` are included in output so the agent knows when results were cut. **Superseded:** the slice now honors `offset`, and a page also stops at the 64,000-byte response budget, so it can hold fewer than `limit` records. `truncated` equals `has_more` — true exactly when matching records remain past the page — rather than tracking `total_found > limit`, which reported truncation on final and exhausted pages. |
-| Every-word matching on text filters | CPSC matches each upstream parameter as one contiguous, case-insensitive substring, so `"Graco crib"` found nothing though two Graco crib recalls exist. Each text filter now requires every whitespace-separated word in its own field, in any order. The filter sends only its longest fragment free of apostrophes and brackets upstream, cut to 200 URL-encoded bytes (one word narrows the fetch; an apostrophe splits CPSC matches between `'` and `’`, and CPSC reads `[…]` as a character class that can exclude the record holding the brackets literally — `RecallDescription=[mm][dd][yy]` omits the one description containing that text), and every word — that one included — is checked locally, which makes CPSC's `%`, `_`, and `[…]` wildcards match literally. Straight and curly apostrophes fold together; no stemming or fuzzy matching. |
-| `RecallDateStart=1970-01-01` floor when nothing else is sent | A request with no filter parameter has been observed to receive a snapshot that lagged filtered requests by a day's recalls (10,023 vs 10,027 records on 2026-09-24; the gap did not reproduce later that day), so a `hazard_search`-only search sends a date floor that precedes the oldest recall (1973-06-08) and takes the filtered path. The cost: the full 27.7 MB dataset still comes back, and the first request for the floor URL after the upstream cache expires is slow — 10.6 s cold, 0.26 s warm on 2026-09-24 — under the 30 s per-attempt timeout. |
-| Response size budget | Row caps cannot bound bytes, because record size varies over 7×. Each list-tool page stops before either surface (`structuredContent` JSON, or `content[]` text with the enrichment trailer) would pass 64,000 UTF-8 bytes. A record is charged the larger of its two sizes, the page overhead reserves the worst-case header, footer, and notice, and a page always returns at least one record when any remain. A budget-cut page carries a notice naming the next offset. 64,000 keeps default 20-record pages whole. |
-| Text filters capped at 500 characters | Without a cap, one oversized value became an oversized upstream URL and was echoed back in `effectiveQuery`, so a 70,000-character title search produced a 71 KB response with zero records. The longest CPSC recall title is 268 characters, so 500 refuses no realistic query; a longer value is rejected as invalid input (`-32602`) before any upstream request, and `tools/list` advertises `maxLength: 500`. The character cap alone does not bound the URL: CPSC answers a query string over 2,048 bytes with HTTP 404, and one 500-character value in a script that URL-encodes to nine bytes a character is 4,500 bytes. So the one word each filter forwards is also cut to its first 200 URL-encoded bytes (whole code points); eight such words plus every date bound stay near 1,830 bytes, and the local every-word check still applies the full word. |
+| No DataCanvas / MirrorService | 9,828 total records, ~300 per year — small enough that filtered queries fit comfortably in context. The API is fast enough (single GET) that a live query per request is fine. No need for a local mirror or analytical canvas. **Superseded (rationale only):** a 200-record page once measured 376 KB, and the heaviest record was over 7× the median. Live per-request queries still stand. List tools use count-based pagination. |
+| Client-side count pagination | CPSC offers no `limit` or `offset`. The server filters and slices the returned set by `offset` and the effective `limit`. `total_found` counts every match. `truncated` equals `has_more`, which is true exactly when matching records remain past the page. |
+| Every-word matching on text filters | CPSC matches each upstream parameter as one contiguous, case-insensitive substring, so `"Graco crib"` found nothing though two Graco crib recalls exist. Each text filter now requires every whitespace-separated word in its own field, in any order. The filter sends only its longest fragment free of apostrophes and brackets upstream, bounded by URL-encoded length (one word narrows the fetch; an apostrophe splits CPSC matches between `'` and `’`, and CPSC reads `[…]` as a character class that can exclude the record holding the brackets literally — `RecallDescription=[mm][dd][yy]` omits the one description containing that text), and every word — that one included — is checked locally, which makes CPSC's `%`, `_`, and `[…]` wildcards match literally. Straight and curly apostrophes fold together; no stemming or fuzzy matching. |
+| `RecallDateStart=1970-01-01` floor when nothing else is sent | A request with no filter parameter has been observed to receive a snapshot that lagged filtered requests by a day's recalls (10,023 vs 10,027 records on 2026-09-24; the gap did not reproduce later that day), so a local-only search, such as `hazard_search` or `upc` on its own, sends a date floor that precedes the oldest recall (1973-06-08) and takes the filtered path. The cost: the full 27.7 MB dataset still comes back, and the first request for the floor URL after the upstream cache expires is slow — 10.6 s cold, 0.26 s warm on 2026-09-24 — under the 30 s per-attempt timeout. |
+| Response size budget | The earlier 64,000-byte limit bounded both response surfaces because record size varied by over 7×. **Superseded:** pages use caller-selected counts up to the tool's page cap. The same records reach both response surfaces. |
+| Text filters capped at 500 characters | Without a cap, one oversized value became an oversized upstream URL and was echoed back in `effectiveQuery`, so a 70,000-character title search produced a 71 KB response with zero records. The longest CPSC recall title is 268 characters, so 500 refuses no realistic query; a longer value is rejected as invalid input (`-32602`) before any upstream request, and `tools/list` advertises `maxLength: 500`. The character cap alone does not bound the URL: CPSC answers a query string over 2,048 bytes with HTTP 404, and one 500-character value in a script that URL-encodes to nine bytes a character is 4,500 bytes. Eight upstream fragments are each capped at 200 URL-encoded bytes and the `Injury` fragment at 180. This keeps all nine fragments, four dates, the format parameter, and the longest `RemedyOption` within 2,046 bytes. The local every-word check still applies the full words. |
 | CPSC text normalized to plain text in the service | Of 10,027 records (2026-09-24), 15 carry HTML residue: `&amp;` in three retailer entries, and `br`/`p`/`td`/`tr` tags in 11 descriptions and one image caption, two of them cut off at the end of the string. The service decodes character references and removes tags once, after the error-row check, so both surfaces and the search word check see the same text. This removes false word matches on markup (`valign`, `amp`) and misses none. The pass is normalization, not correction: an unknown reference (`C&T;`), a reference to a control character other than tab, line feed, or carriage return (invisible once decoded, and HTML reads 128–159 as Windows-1252 punctuation), a bare `&`, `<` before a digit (`<5mW`), and residue with no `<` all stay as they are, a removed tag leaves a space or line break rather than joining its neighbours, and caller input is never decoded. It is one linear scan per string, and a full-dataset fetch spends about 20 ms normalizing. |
-| Markdown escaped where CPSC text enters `content[]` | Rendered as CommonMark, 43 records lost characters. Literal `*` in serial and model patterns became emphasis in 41 of them and dropped the asterisks. The tools backslash-escape CPSC text as they interpolate it. A bare web address GFM autolinks stays bare only when it holds nothing to escape and no escaped `<` follows it. Otherwise it renders as `markdownLink(span, href)` over GFM's own link span (href = the span, or `http://` before a `www.` span), and the characters GFM trims from an autolink's end by cmark-gfm's rule (`? ! . , : * _ ~ " '`, an unbalanced `)`, an `&name;` entity, `;`) are escaped after the link, as is a `!` right before it. CommonMark has no extended autolinks, so a bare address there lost `*` and `_` to emphasis and decoded `&amp;`, while a backslash inside a GFM autolink shows literally and ends the link; backslashes inside the address were rejected for that reason, and `<…>` autolinks because they need a scheme and cannot carry `www.`. An address GFM leaves as plain text (a `www.` address after punctuation such as `"`, or a host with `_` in its last two labels), or whose href is not `http(s)`, is escaped like the text around it. Across the corpus (2026-10-29), 9 address-bearing text fields change encoding, 929 bytes in all. A carriage return becomes a line feed first, since CommonMark ends a line at either and an unescaped marker after one would open a block outside the quote. After that, every text field of every record renders unaltered under CommonMark and GFM. `cpsc_url` goes through as a percent-encoded link destination, since seven CPSC recall URLs contain spaces, with any backslash or character reference in it backslash-escaped so the destination is not decoded into a different address. Image and coordinated-recall addresses render bare, encoded the same way: 1,282 image URLs across 420 records contain spaces, and nine end in `.` or `_`, which GFM leaves out of an autolink, so that final character is percent-encoded too. Each rendered link then resolves to its stored address. An image entry that is not a web address (26796 holds a sentence) is escaped as text instead. The list tools escape inside `renderRecallBlock`, so the page budget charges the escaped bytes (up to 56 more on one search block). `structuredContent` stays unescaped. |
+| Markdown escaped where CPSC text enters `content[]` | Rendered as CommonMark, 43 records lost characters. Literal `*` in serial and model patterns became emphasis in 41 of them and dropped the asterisks. The tools backslash-escape CPSC text as they interpolate it. A bare web address GFM autolinks stays bare only when it holds nothing to escape and no escaped `<` follows it. Otherwise it renders as `markdownLink(span, href)` over GFM's own link span (href = the span, or `http://` before a `www.` span), and the characters GFM trims from an autolink's end by cmark-gfm's rule (`? ! . , : * _ ~ " '`, an unbalanced `)`, an `&name;` entity, `;`) are escaped after the link, as is a `!` right before it. CommonMark has no extended autolinks, so a bare address there lost `*` and `_` to emphasis and decoded `&amp;`, while a backslash inside a GFM autolink shows literally and ends the link; backslashes inside the address were rejected for that reason, and `<…>` autolinks because they need a scheme and cannot carry `www.`. An address GFM leaves as plain text (a `www.` address after punctuation such as `"`, or a host with `_` in its last two labels), or whose href is not `http(s)`, is escaped like the text around it. Across the corpus (2026-10-29), 9 address-bearing text fields change encoding, 929 bytes in all. A carriage return becomes a line feed first, since CommonMark ends a line at either and an unescaped marker after one would open a block outside the quote. After that, every text field of every record renders unaltered under CommonMark and GFM. `cpsc_url` goes through as a percent-encoded link destination, since seven CPSC recall URLs contain spaces, with any backslash or character reference in it backslash-escaped so the destination is not decoded into a different address. Image and coordinated-recall addresses render bare, encoded the same way: 1,282 image URLs across 420 records contain spaces, and nine end in `.` or `_`, which GFM leaves out of an autolink, so that final character is percent-encoded too. Each rendered link then resolves to its stored address. An image entry that is not a web address (26796 holds a sentence) is escaped as text instead. `structuredContent` stays unescaped. |
 | One reordered retry on a CPSC provider failure | CPSC answers a transient data-source failure (`The underlying provider failed on Open.`) with an HTTP 200 error row, then serves that row from a server-side cache keyed on the exact query string. On 2026-09-24 the row held for 23085, 10208, and 09283 for over 24 minutes, while the same query with its parameters reordered, or a parameter name in a different case, returned the record at once. That error row gets one immediate retry with `format` moved last. A second failure surfaces as retryable `upstream_error` rather than a deterministic rejection that tells the caller to doubt a valid recall number. The fetch returns the failure as a value, so the retry loop never repeats a cached URL. Every other error row (`String was not recognized as a valid DateTime.`) stays non-retryable, with no retry. |
-| `RecallNumber` regex `^\d{5}([a-d])?$` | Full-dataset analysis (10,058 records, 2026-10-29): every number matches. 111 records, all from 1998–2001, carry a letter suffix (`\d{5}[a-d]`); every other record is plain `\d{5}`, including 614 from 1998–2001 and all 1,423 from 1973–1997, so the suffix marks neither an era nor every record in one. The regex `^\d{5,7}$` in the original design was wrong — it allowed 6- and 7-digit purely numeric strings (which don't exist) but rejected valid historical alphanumeric strings like "99003a". |
+| `RecallNumber` regex `^\d{5}([a-d])?$` | Full-dataset analysis (10,058 records, 2026-10-29): every number matches. 111 records, all from 1998–2001, carry a letter suffix (`\d{5}[a-d]`); every other record is plain `\d{5}`, including 614 from 1998–2001 and all 1,423 from 1973–1997, so the suffix marks neither an era nor every record in one. The regex `^\d{5,7}$` in the original design was wrong — it allowed 6- and 7-digit purely numeric strings (which don't exist) but rejected valid historical alphanumeric strings like "99003a". **Superseded for default tool input:** the canonical form still identifies records, and the default input also accepts the printed hyphen, surrounding whitespace, and uppercase suffixes. When normalization changes the input, the tool logs and increments a counter before lookup. |
 | `cpsc_get_recall` matches the recall number exactly | CPSC's `RecallNumber` filter is a case-insensitive substring match returned in no stable order, so the bare base of a lettered family (`01160`) returned whichever separate lettered recall came first. Every one of the 50 lettered families has two or more members and no base number is itself a record, so a base is never the caller's recall. The service keeps only the row whose number equals the request, compared case-insensitively; when none does, `not_found` carries a hint naming the other numbers CPSC returned (`01160a, 01160b, 01160c are separate recalls, not parts of one recall`) from the same response, with no extra request. The declared `not_found` contract is unchanged. |
 | One 50 s deadline per tool call | Each attempt had its own 30 s timeout, and `withRetry` (up to 3 retries, 500/1,000/2,000 ms backoff ±25%) plus the reordered provider-failure query could hold a call for about 249 s, far past the MCP SDK's default 60 s client timeout, so the caller saw a transport timeout instead of this server's error. One 50 s budget, measured from the start of the fetch, now covers every attempt, every backoff, and the reordered query, which gets what remains; each attempt's timeout is the lesser of 30 s and that remainder, and its signal also bounds the body read. Expiry surfaces from all three tools as retryable `upstream_error`, 10 s inside the client default. Caller cancellation stays a cancellation, never an expiry or a result, and a query that returned a provider-failure row is still never requested again. |
-| Oversized `limit` served at the page ceiling | `limit` accepts 1–10,000 on both list tools. A page holds at most 200 search or 100 recent recalls; a `limit` between the page ceiling and 10,000 is served at the ceiling, with a notice (`Returned 200 of the 500 requested recalls: a page holds at most 200 recalls. Continue with offset 200 for the rest.`) only when the ceiling ended a page that has more after it. Rejecting a value with one clear reading costs the caller a retry; an unbounded value accepts absurd input, so 10,000 stays a hard ceiling (`-32602` above it, as for 0, negatives, and fractions). The 64,000-byte budget usually cuts a page first, and its notice keeps naming the caller's `limit`; the two notices never co-occur. `ctx.enrich.truncated()` is not used for this, because it collides with the output's `truncated` field. |
+| Oversized `limit` served at the page cap | The original 200/100 page ceilings and 10,000 input maximum were superseded. The current caps are 500 search and 1,000 recent. Default schemas advertise a positive integer, and a requested value above the cap is clamped, logged, and counted. The page includes a cap notice naming the next offset only if matches remain. `CPSC_CLAMP_LIMITS=false` advertises and enforces each cap at validation. |
 | `SoldAtLabel` / `HazardType` / `HazardTypeID` / `CompanyID` / `CategoryID` / `Products[].Description` omitted from output | Verified always null or empty across the full dataset. Including them adds noise without value. If the API populates them in the future, the normalization layer will need updating — noted in service comments. |
 | UPCs are recall-level, not per-product — UPC-to-product attribution is ambiguous for multi-product recalls | `ProductUPCs` is a top-level array on the recall record, not nested under individual `Products[]` entries. Verified with 9 multi-product recalls that also have UPCs: all UPCs appear at the top level without per-product attribution. Output design reflects this — UPCs are shown at the recall level, not per-product. |

@@ -5,12 +5,13 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { createCounter, markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { escapeMarkdown as md } from '@/mcp-server/tools/markdown-escape.js';
 import {
   getCpscRecallService,
   type RecallLookup,
 } from '@/services/cpsc-recall/cpsc-recall-service.js';
+import { REMEDY_OPTIONS_DESCRIPTION } from '@/services/cpsc-recall/remedy-options.js';
 
 /** Static jurisdiction note included in every response. */
 const JURISDICTION =
@@ -24,6 +25,14 @@ const SOURCE_NOTE =
 const ABSENT_TEXT = '_Not provided by CPSC._';
 /** Absence placeholder for fields a consumer can still resolve on the CPSC page. */
 const ABSENT_TEXT_SEE_PAGE = '_Not provided by CPSC. See the CPSC recall page._';
+
+const RECALL_NUMBER_PATTERN = /^\d{5}([a-d])?$/;
+const COPIED_RECALL_NUMBER_PATTERN = /^\s*\d{2}-?\d{3}[a-dA-D]?\s*$/;
+const normalizedRecallNumbers = createCounter(
+  'mcp.cpsc.recall_number.normalized',
+  'Accepted CPSC recall numbers normalized before lookup.',
+  '{calls}',
+);
 
 /**
  * Renders relayed CPSC text as a Markdown-escaped blockquote, so upstream narrative is
@@ -42,377 +51,400 @@ function asSourceText(text: string): string {
     .join('\n');
 }
 
-export const cpscGetRecall = tool('cpsc_get_recall', {
-  title: 'Get CPSC Recall Detail',
-  description:
-    'Fetch the full record for one CPSC recall by recall number: hazard description, remedy instructions, every product variant, UPCs, incident and injury reports, images, and the official CPSC recall page URL. Get a recall number from cpsc_search_recalls or cpsc_get_recent. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
-  annotations: { readOnlyHint: true, idempotentHint: true },
+/** Builds the detail tool with the startup-selected recall number grammar. */
+export function createCpscGetRecall(normalizeRecallNumbers: boolean) {
+  return tool('cpsc_get_recall', {
+    title: 'Get CPSC Recall Detail',
+    description:
+      'Fetch the full record for one CPSC recall by recall number: hazard description, remedy instructions, every product variant, UPCs, incident and injury reports, images, and the official CPSC recall page URL. Get a recall number from cpsc_search_recalls or cpsc_get_recent. CPSC jurisdiction: consumer products, including child-resistant packaging for drugs and supplements, ATVs and snowmobiles, bicycle tires, and gun safes and locks; food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF) belong to other agencies.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
 
-  input: z.object({
-    recall_number: z
-      .string()
-      .regex(
-        /^\d{5}([a-d])?$/,
-        'A CPSC recall number is 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent.',
-      )
-      .describe(
-        'CPSC recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent results.',
-      ),
-  }),
+    input: z.object({
+      recall_number: z
+        .string()
+        .regex(
+          normalizeRecallNumbers ? COPIED_RECALL_NUMBER_PATTERN : RECALL_NUMBER_PATTERN,
+          normalizeRecallNumbers
+            ? 'A CPSC recall number is 5 digits, e.g. "25043" or "25-043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Surrounding whitespace and uppercase suffixes are accepted. Get one from cpsc_search_recalls or cpsc_get_recent.'
+            : 'A CPSC recall number is 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent.',
+        )
+        .describe(
+          normalizeRecallNumbers
+            ? 'CPSC recall number: 5 digits, e.g. "25043" or "25-043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Surrounding whitespace and uppercase suffixes are accepted.'
+            : 'CPSC recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Get one from cpsc_search_recalls or cpsc_get_recent results.',
+        ),
+    }),
 
-  output: z.object({
-    recall_number: z.string().describe('Recall identifier.'),
-    recall_date: z.string().describe('Date issued, ISO 8601.'),
-    last_updated: z.string().describe('Date last published, ISO 8601.'),
-    title: z.string().describe('Official recall title.'),
-    description: z
-      .string()
-      .nullable()
-      .describe(
-        'Full recall description including product identification details. Model numbers are typically embedded here, not in a structured field. Null when CPSC published the record without a description — rare, but a genuine record can still be complete otherwise.',
-      ),
-    cpsc_url: z
-      .string()
-      .describe('Official CPSC recall page — authoritative source for consumers.'),
-    consumer_contact: z
-      .string()
-      .nullable()
-      .describe('Contact information for claiming the remedy. Null when not provided.'),
+    output: z.object({
+      recall_number: z.string().describe('Recall identifier.'),
+      recall_date: z.string().describe('Date issued, ISO 8601.'),
+      last_updated: z.string().describe('Date last published, ISO 8601.'),
+      title: z.string().describe('Official recall title.'),
+      description: z
+        .string()
+        .nullable()
+        .describe(
+          'Full recall description including product identification details. Model numbers are typically embedded here, not in a structured field. Null when CPSC published the record without a description — rare, but a genuine record can still be complete otherwise.',
+        ),
+      cpsc_url: z
+        .string()
+        .describe('Official CPSC recall page — authoritative source for consumers.'),
+      consumer_contact: z
+        .string()
+        .nullable()
+        .describe('Contact information for claiming the remedy. Null when not provided.'),
 
-    hazards: z
-      .array(
-        z
-          .object({ description: z.string().describe('What is dangerous about this product.') })
-          .describe('A hazard associated with this recall.'),
-      )
-      .describe('Hazards — read this first.'),
+      hazards: z
+        .array(
+          z
+            .object({ description: z.string().describe('What is dangerous about this product.') })
+            .describe('A hazard associated with this recall.'),
+        )
+        .describe('Hazards — read this first.'),
 
-    remedy_options: z
-      .array(z.string().describe('Remedy type.'))
-      .describe(
-        'Remedy types available: Refund, Repair, Replace, New Instructions, Dispose, Label, No Remedy Available, Inspect. Often empty — CPSC classified the remedy on fewer than half its records. Read remedy_instructions when this is empty, and fall back to cpsc_url when that is empty too, rather than reporting that no remedy exists.',
-      ),
-    remedy_instructions: z
-      .string()
-      .describe('Full remedy instructions — exactly what a consumer should do and how to claim.'),
+      remedy_options: z
+        .array(z.string().describe('Remedy type.'))
+        .describe(
+          `${REMEDY_OPTIONS_DESCRIPTION} Read remedy_instructions when the list is empty. If instructions are missing too, consult cpsc_url.`,
+        ),
+      remedy_instructions: z
+        .string()
+        .describe('Full remedy instructions — exactly what a consumer should do and how to claim.'),
 
-    products: z
-      .array(
-        z
-          .object({
-            name: z.string().describe('Product name.'),
-            units_recalled: z
-              .string()
-              .describe('Estimated number of units recalled, e.g. "About 2,500".'),
-          })
-          .describe('A product covered by this recall.'),
-      )
-      .describe(
-        'Products covered. A recall may include multiple products. Model numbers are often in the description text, not a structured field.',
-      ),
+      products: z
+        .array(
+          z
+            .object({
+              name: z.string().describe('Product name.'),
+              units_recalled: z
+                .string()
+                .describe('Estimated number of units recalled, e.g. "About 2,500".'),
+            })
+            .describe('A product covered by this recall.'),
+        )
+        .describe(
+          'Products covered. A recall may include multiple products. Model numbers are often in the description text, not a structured field.',
+        ),
 
-    upcs: z
-      .array(z.string().describe('UPC code.'))
-      .describe(
-        'UPC codes for this recall (sparse — ~4% of records have UPCs). CPSC lists UPCs for the recall as a whole, not per product, so on a recall covering several products a UPC cannot be tied to one of them.',
-      ),
+      upcs: z
+        .array(z.string().describe('UPC code.'))
+        .describe(
+          'UPC codes for this recall (sparse — ~4% of records have UPCs). CPSC lists UPCs for the recall as a whole, not per product, so on a recall covering several products a UPC cannot be tied to one of them.',
+        ),
 
-    injuries: z
-      .string()
-      .describe('Injury and incident report narrative, e.g. "None reported" or incident count.'),
+      injuries: z
+        .string()
+        .describe('Injury and incident report narrative, e.g. "None reported" or incident count.'),
 
-    manufacturers: z
-      .array(z.string().describe('Manufacturer name.'))
-      .describe('Manufacturer names (often empty — see importers).'),
-    importers: z.array(z.string().describe('Importer name.')).describe('Importer company names.'),
-    retailers: z
-      .array(z.string().describe('Retailer name with sale date range and price.'))
-      .describe('Retailer names with sale date ranges and price.'),
-    distributors: z
-      .array(z.string().describe('Distributor name.'))
-      .describe('Distributor company names.'),
-    manufacturer_countries: z
-      .array(z.string().describe('Country of manufacture.'))
-      .describe('Countries of manufacture.'),
+      manufacturers: z
+        .array(z.string().describe('Manufacturer name.'))
+        .describe('Manufacturer names (often empty — see importers).'),
+      importers: z.array(z.string().describe('Importer name.')).describe('Importer company names.'),
+      retailers: z
+        .array(z.string().describe('Retailer name with sale date range and price.'))
+        .describe('Retailer names with sale date ranges and price.'),
+      distributors: z
+        .array(z.string().describe('Distributor name.'))
+        .describe('Distributor company names.'),
+      manufacturer_countries: z
+        .array(z.string().describe('Country of manufacture.'))
+        .describe('Countries of manufacture.'),
 
-    images: z
-      .array(
-        z
-          .object({
-            url: z.string().describe('Image URL.'),
-            caption: z.string().describe('Caption describing what the image shows.'),
-          })
-          .describe('An image from the recall notice.'),
-      )
-      .describe('Product and identification images from the recall notice.'),
+      images: z
+        .array(
+          z
+            .object({
+              url: z.string().describe('Image URL.'),
+              caption: z.string().describe('Caption describing what the image shows.'),
+            })
+            .describe('An image from the recall notice.'),
+        )
+        .describe('Product and identification images from the recall notice.'),
 
-    coordinated_recalls: z
-      .array(z.string().describe('URL of coordinated recall by another agency.'))
-      .describe('URLs of coordinated recalls by other agencies (e.g., Canada Health).'),
+      coordinated_recalls: z
+        .array(z.string().describe('URL of coordinated recall by another agency.'))
+        .describe('URLs of coordinated recalls by other agencies (e.g., Canada Health).'),
 
-    data_quality_notes: z
-      .array(z.string().describe('One gap found in the CPSC record.'))
-      .describe(
-        'Gaps this server observed in the CPSC record — absent description, absent hazard text, absent product entries. Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
-      ),
+      data_quality_notes: z
+        .array(z.string().describe('One gap found in the CPSC record.'))
+        .describe(
+          'Gaps this server observed in the CPSC record — absent description, absent hazard text, absent product entries. Derived from which fields CPSC left empty, not from any judgement about the recall itself. Empty when nothing is missing.',
+        ),
 
-    cpsc_jurisdiction: z
-      .string()
-      .describe(
-        'Which products CPSC covers, including those near the lines of other agencies, and which agencies own food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF).',
-      ),
-    source_note: z
-      .string()
-      .describe(
-        'Provenance caveat: recall fields are CPSC record text with HTML markup and character codes converted to plain text, not otherwise edited or verified; check cpsc_url before a consumer-facing decision.',
-      ),
-  }),
+      cpsc_jurisdiction: z
+        .string()
+        .describe(
+          'Which products CPSC covers, including those near the lines of other agencies, and which agencies own food and drugs (FDA), on-road vehicles and their tires (NHTSA), boats (USCG), pesticides (EPA), and firearms (ATF).',
+        ),
+      source_note: z
+        .string()
+        .describe(
+          'Provenance caveat: recall fields are CPSC record text with HTML markup and character codes converted to plain text, not otherwise edited or verified; check cpsc_url before a consumer-facing decision.',
+        ),
+    }),
 
-  errors: [
-    {
-      reason: 'not_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No recall exists with the given recall number',
-      recovery:
-        'Verify the recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Use cpsc_search_recalls or cpsc_get_recent to find the correct number.',
-    },
-    {
-      reason: 'upstream_error',
-      code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, reported a temporary failure reading its recall data, or sent an unreadable response',
-      recovery: 'The CPSC recall service is occasionally unavailable. Retry in a few seconds.',
-      retryable: true,
-    },
-    {
-      reason: 'upstream_rejected',
-      code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'CPSC rejected the lookup instead of returning a recall, and it rejects the same request every time',
-      recovery:
-        'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then confirm the recall number with cpsc_search_recalls or cpsc_get_recent.',
-      retryable: false,
-    },
-  ],
+    errors: [
+      {
+        reason: 'not_found',
+        code: JsonRpcErrorCode.NotFound,
+        when: 'No recall exists with the given recall number',
+        recovery:
+          'Verify the recall number: 5 digits, e.g. "25043", with a letter a–d on some 1998–2001 records, e.g. "99003a". Use cpsc_search_recalls or cpsc_get_recent to find the correct number.',
+      },
+      {
+        reason: 'upstream_error',
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        when: 'The CPSC recall service (saferproducts.gov) was unavailable, timed out, reported a temporary failure reading its recall data, or sent an unreadable response',
+        recovery: 'The CPSC recall service is occasionally unavailable. Retry in a few seconds.',
+        retryable: true,
+      },
+      {
+        reason: 'upstream_rejected',
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        when: 'CPSC rejected the lookup instead of returning a recall, and it rejects the same request every time',
+        recovery:
+          'Do not retry this request unchanged — it fails deterministically. Read the message for what CPSC rejected, then confirm the recall number with cpsc_search_recalls or cpsc_get_recent.',
+        retryable: false,
+      },
+    ],
 
-  async handler(input, ctx) {
-    ctx.log.info('Fetching CPSC recall detail', { recall_number: input.recall_number });
-
-    const svc = getCpscRecallService();
-    let lookup: RecallLookup;
-    try {
-      lookup = await svc.getByNumber(input.recall_number, ctx);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      if (err instanceof McpError && err.data?.retryable === false) {
-        throw ctx.fail('upstream_rejected', detail, undefined, { cause: err });
+    async handler(input, ctx) {
+      const recallNumber = normalizeRecallNumbers
+        ? input.recall_number.trim().replace('-', '').toLowerCase()
+        : input.recall_number;
+      if (recallNumber !== input.recall_number) {
+        ctx.log.info('Normalized CPSC recall number', { recall_number: recallNumber });
+        normalizedRecallNumbers.add(1);
       }
-      throw ctx.fail('upstream_error', `CPSC API request failed: ${detail}`, undefined, {
-        cause: err,
-      });
-    }
+      ctx.log.info('Fetching CPSC recall detail', { recall_number: recallNumber });
 
-    if (lookup.recall === null) {
-      const others = lookup.otherNumbers.join(', ');
-      if (others) {
-        throw ctx.fail(
-          'not_found',
-          `No CPSC recall has the number "${input.recall_number}"; CPSC matched other recalls whose numbers contain it.`,
-          {
-            recovery: {
-              hint: `${others} are separate recalls, not parts of one recall — call cpsc_get_recall with the number you mean.`,
+      const svc = getCpscRecallService();
+      let lookup: RecallLookup;
+      try {
+        lookup = await svc.getByNumber(recallNumber, ctx);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        if (err instanceof McpError && err.data?.retryable === false) {
+          throw ctx.fail('upstream_rejected', detail, undefined, { cause: err });
+        }
+        throw ctx.fail('upstream_error', `CPSC API request failed: ${detail}`, undefined, {
+          cause: err,
+        });
+      }
+
+      if (lookup.recall === null) {
+        const others = lookup.otherNumbers.join(', ');
+        if (others) {
+          throw ctx.fail(
+            'not_found',
+            `No CPSC recall has the number "${recallNumber}"; CPSC matched other recalls whose numbers contain it.`,
+            {
+              recovery: {
+                hint: `${others} are separate recalls, not parts of one recall — call cpsc_get_recall with the number you mean.`,
+              },
             },
-          },
+          );
+        }
+        throw ctx.fail('not_found', `No CPSC recall found with number "${recallNumber}".`);
+      }
+      const raw = lookup.recall;
+
+      const hazards = raw.Hazards.filter((h) => h.Name).map((h) => ({ description: h.Name }));
+      const products = raw.Products.map((p) => ({
+        name: p.Name,
+        units_recalled: p.NumberOfUnits ?? '',
+      }));
+
+      const data_quality_notes: string[] = [];
+      if (!raw.Description?.trim()) {
+        data_quality_notes.push(
+          'CPSC published no description text for this recall. Check the product names, image captions, and official CPSC recall page for model numbers.',
         );
       }
-      throw ctx.fail('not_found', `No CPSC recall found with number "${input.recall_number}".`);
-    }
-    const raw = lookup.recall;
+      if (hazards.length === 0) {
+        data_quality_notes.push('CPSC listed no hazard description for this recall.');
+      }
+      if (products.length === 0) {
+        data_quality_notes.push('CPSC listed no product entries for this recall.');
+      }
 
-    const hazards = raw.Hazards.filter((h) => h.Name).map((h) => ({ description: h.Name }));
-    const products = raw.Products.map((p) => ({
-      name: p.Name,
-      units_recalled: p.NumberOfUnits ?? '',
-    }));
+      return {
+        recall_number: raw.RecallNumber,
+        recall_date: raw.RecallDate.slice(0, 10),
+        last_updated: raw.LastPublishDate.slice(0, 10),
+        title: raw.Title,
+        description: raw.Description,
+        cpsc_url: raw.URL,
+        consumer_contact: raw.ConsumerContact,
+        hazards,
+        remedy_options: raw.RemedyOptions.map((o) => o.Option).filter(Boolean),
+        remedy_instructions: raw.Remedies.map((r) => r.Name)
+          .filter(Boolean)
+          .join(' '),
+        products,
+        upcs: raw.ProductUPCs.map((u) => u.UPC).filter(Boolean),
+        injuries: raw.Injuries.map((i) => i.Name)
+          .filter(Boolean)
+          .join(' '),
+        manufacturers: raw.Manufacturers.map((m) => m.Name).filter(Boolean),
+        importers: raw.Importers.map((i) => i.Name).filter(Boolean),
+        retailers: raw.Retailers.map((r) => r.Name).filter(Boolean),
+        distributors: raw.Distributors.map((d) => d.Name).filter(Boolean),
+        manufacturer_countries: raw.ManufacturerCountries.map((c) => c.Country).filter(Boolean),
+        images: raw.Images.map((img) => ({ url: img.URL, caption: img.Caption })),
+        coordinated_recalls: raw.Inconjunctions.map((inj) => inj.URL).filter(Boolean),
+        data_quality_notes,
+        cpsc_jurisdiction: JURISDICTION,
+        source_note: SOURCE_NOTE,
+      };
+    },
 
-    const data_quality_notes: string[] = [];
-    if (!raw.Description?.trim()) {
-      data_quality_notes.push(
-        'CPSC published no description text for this recall, so product identification details (including model numbers) are unavailable here.',
-      );
-    }
-    if (hazards.length === 0) {
-      data_quality_notes.push('CPSC listed no hazard description for this recall.');
-    }
-    if (products.length === 0) {
-      data_quality_notes.push('CPSC listed no product entries for this recall.');
-    }
+    /**
+     * Relayed CPSC text is rendered as blockquotes under "(CPSC source text)" headings;
+     * everything outside a blockquote is this server's own guidance.
+     */
+    format(result) {
+      const lines: string[] = [];
+      const { description } = result;
+      const hasDescription = description !== null && description.trim().length > 0;
 
-    return {
-      recall_number: raw.RecallNumber,
-      recall_date: raw.RecallDate.slice(0, 10),
-      last_updated: raw.LastPublishDate.slice(0, 10),
-      title: raw.Title,
-      description: raw.Description,
-      cpsc_url: raw.URL,
-      consumer_contact: raw.ConsumerContact,
-      hazards,
-      remedy_options: raw.RemedyOptions.map((o) => o.Option).filter(Boolean),
-      remedy_instructions: raw.Remedies.map((r) => r.Name)
-        .filter(Boolean)
-        .join(' '),
-      products,
-      upcs: raw.ProductUPCs.map((u) => u.UPC).filter(Boolean),
-      injuries: raw.Injuries.map((i) => i.Name)
-        .filter(Boolean)
-        .join(' '),
-      manufacturers: raw.Manufacturers.map((m) => m.Name).filter(Boolean),
-      importers: raw.Importers.map((i) => i.Name).filter(Boolean),
-      retailers: raw.Retailers.map((r) => r.Name).filter(Boolean),
-      distributors: raw.Distributors.map((d) => d.Name).filter(Boolean),
-      manufacturer_countries: raw.ManufacturerCountries.map((c) => c.Country).filter(Boolean),
-      images: raw.Images.map((img) => ({ url: img.URL, caption: img.Caption })),
-      coordinated_recalls: raw.Inconjunctions.map((inj) => inj.URL).filter(Boolean),
-      data_quality_notes,
-      cpsc_jurisdiction: JURISDICTION,
-      source_note: SOURCE_NOTE,
-    };
-  },
-
-  /**
-   * Relayed CPSC text is rendered as blockquotes under "(CPSC source text)" headings;
-   * everything outside a blockquote is this server's own guidance.
-   */
-  format(result) {
-    const lines: string[] = [];
-
-    lines.push(`# [${result.recall_number}] — ${md(result.title)}`);
-    lines.push(`Issued: ${result.recall_date} | Last updated: ${result.last_updated}`);
-    lines.push(
-      'Quoted blocks below are CPSC source text, converted to plain text; a backslash before a Markdown character is an escape, not part of the text.',
-    );
-    lines.push('');
-
-    lines.push('**⚠️ Hazard (CPSC source text):**');
-    lines.push(
-      result.hazards.length > 0
-        ? asSourceText(result.hazards.map((h) => h.description).join('; '))
-        : ABSENT_TEXT,
-    );
-    lines.push('');
-
-    const remedyTypes =
-      result.remedy_options.length > 0 ? md(result.remedy_options.join(', ')) : 'Not specified';
-    lines.push(`**✅ Remedy:** ${remedyTypes} — instructions from CPSC:`);
-    lines.push(
-      result.remedy_instructions ? asSourceText(result.remedy_instructions) : ABSENT_TEXT_SEE_PAGE,
-    );
-    lines.push('');
-
-    lines.push('**Contact (CPSC source text):**');
-    lines.push(
-      result.consumer_contact ? asSourceText(result.consumer_contact) : ABSENT_TEXT_SEE_PAGE,
-    );
-    lines.push('');
-
-    lines.push('## Products Affected (CPSC source text)');
-    for (const p of result.products) {
+      lines.push(`# [${result.recall_number}] — ${md(result.title)}`);
+      lines.push(`Issued: ${result.recall_date} | Last updated: ${result.last_updated}`);
       lines.push(
-        `> - ${md(p.name)} — ${p.units_recalled ? md(p.units_recalled) : 'units not specified'}`,
+        'Quoted blocks below are CPSC source text, converted to plain text; a backslash before a Markdown character is an escape, not part of the text.',
       );
-    }
-    if (result.products.length === 0) {
-      lines.push(ABSENT_TEXT);
-    }
-    if (result.upcs.length > 0) {
-      // A bare '>' keeps the UPC line a sibling block inside the quote, not a list continuation.
-      if (result.products.length > 0) {
-        lines.push('>');
+      lines.push('');
+
+      lines.push('**⚠️ Hazard (CPSC source text):**');
+      lines.push(
+        result.hazards.length > 0
+          ? asSourceText(result.hazards.map((h) => h.description).join('; '))
+          : ABSENT_TEXT,
+      );
+      lines.push('');
+
+      const remedyTypes =
+        result.remedy_options.length > 0 ? md(result.remedy_options.join(', ')) : 'Not specified';
+      lines.push(`**✅ Remedy:** ${remedyTypes} — instructions from CPSC:`);
+      lines.push(
+        result.remedy_instructions
+          ? asSourceText(result.remedy_instructions)
+          : ABSENT_TEXT_SEE_PAGE,
+      );
+      lines.push('');
+
+      lines.push('**Contact (CPSC source text):**');
+      lines.push(
+        result.consumer_contact ? asSourceText(result.consumer_contact) : ABSENT_TEXT_SEE_PAGE,
+      );
+      lines.push('');
+
+      lines.push('## Products Affected (CPSC source text)');
+      for (const p of result.products) {
+        lines.push(
+          `> - ${md(p.name)} — ${p.units_recalled ? md(p.units_recalled) : 'units not specified'}`,
+        );
       }
-      lines.push(`> UPCs (recall-level): ${md(result.upcs.join(', '))}`);
-    }
-    lines.push('');
-    lines.push('Model numbers are in the description below if not listed here.');
-    lines.push(
-      'UPCs are recorded per recall, not per product, and apply to the recall as a whole.',
-    );
-    lines.push('');
-
-    lines.push('## Description (CPSC source text)');
-    lines.push(result.description?.trim() ? asSourceText(result.description) : ABSENT_TEXT);
-    lines.push('');
-
-    lines.push('## Incidents / Injuries (CPSC source text)');
-    lines.push(result.injuries ? asSourceText(result.injuries) : ABSENT_TEXT);
-    lines.push('');
-
-    if (result.retailers.length > 0) {
-      lines.push('## Sold By (CPSC source text)');
-      for (const r of result.retailers) {
-        lines.push(`> - ${md(r)}`);
+      if (result.products.length === 0) {
+        lines.push(ABSENT_TEXT);
+      }
+      if (result.upcs.length > 0) {
+        // A bare '>' keeps the UPC line a sibling block inside the quote, not a list continuation.
+        if (result.products.length > 0) {
+          lines.push('>');
+        }
+        lines.push(`> UPCs (recall-level): ${md(result.upcs.join(', '))}`);
       }
       lines.push('');
-    }
-
-    /** Manufacturer and importer are distinct roles — each gets its own heading. */
-    if (result.manufacturers.length > 0) {
-      lines.push('## Manufactured By');
-      for (const org of result.manufacturers) {
-        lines.push(`- ${md(org)}`);
+      if (hasDescription) {
+        lines.push('Model numbers often appear in the description below.');
       }
-    }
-    if (result.importers.length > 0) {
-      lines.push('## Imported By');
-      for (const org of result.importers) {
-        lines.push(`- ${md(org)}`);
-      }
-    }
-    if (result.manufacturer_countries.length > 0) {
-      lines.push(`Country of origin: ${md(result.manufacturer_countries.join(', '))}`);
-    }
-    if (
-      result.manufacturers.length > 0 ||
-      result.importers.length > 0 ||
-      result.manufacturer_countries.length > 0
-    ) {
+      lines.push(
+        'UPCs are recorded per recall, not per product, and apply to the recall as a whole.',
+      );
       lines.push('');
-    }
 
-    if (result.distributors.length > 0) {
-      lines.push('## Distributors');
-      for (const d of result.distributors) {
-        lines.push(`- ${md(d)}`);
-      }
+      lines.push('## Description (CPSC source text)');
+      lines.push(hasDescription ? asSourceText(description) : ABSENT_TEXT);
       lines.push('');
-    }
 
-    if (result.images.length > 0) {
-      lines.push(`## Images (${result.images.length}) — captions are CPSC source text`);
-      for (const img of result.images) {
-        lines.push(`- ${markdownImage(img.caption, img.url)}`);
-        lines.push(asSourceText(img.caption));
+      lines.push('## Incidents / Injuries (CPSC source text)');
+      lines.push(result.injuries ? asSourceText(result.injuries) : ABSENT_TEXT);
+      lines.push('');
+
+      if (result.retailers.length > 0) {
+        lines.push('## Sold By (CPSC source text)');
+        for (const r of result.retailers) {
+          lines.push(`> - ${md(r)}`);
+        }
         lines.push('');
       }
-    }
 
-    if (result.coordinated_recalls.length > 0) {
-      lines.push('## Coordinated Recalls');
-      for (const url of result.coordinated_recalls) {
-        lines.push(`- ${markdownLink(url, url)}`);
+      /** Manufacturer and importer are distinct roles — each gets its own heading. */
+      if (result.manufacturers.length > 0) {
+        lines.push('## Manufactured By');
+        for (const org of result.manufacturers) {
+          lines.push(`- ${md(org)}`);
+        }
       }
-      lines.push('');
-    }
-
-    if (result.data_quality_notes.length > 0) {
-      lines.push('## Data quality (server-assessed)');
-      for (const note of result.data_quality_notes) {
-        lines.push(`- ${note}`);
+      if (result.importers.length > 0) {
+        lines.push('## Imported By');
+        for (const org of result.importers) {
+          lines.push(`- ${md(org)}`);
+        }
       }
-      lines.push('');
-    }
+      if (result.manufacturer_countries.length > 0) {
+        lines.push(`Country of origin: ${md(result.manufacturer_countries.join(', '))}`);
+      }
+      if (
+        result.manufacturers.length > 0 ||
+        result.importers.length > 0 ||
+        result.manufacturer_countries.length > 0
+      ) {
+        lines.push('');
+      }
 
-    lines.push(markdownLink('View official CPSC recall page', result.cpsc_url));
-    lines.push(`Source: ${result.source_note}`);
-    lines.push(`CPSC jurisdiction: ${result.cpsc_jurisdiction}`);
+      if (result.distributors.length > 0) {
+        lines.push('## Distributors');
+        for (const d of result.distributors) {
+          lines.push(`- ${md(d)}`);
+        }
+        lines.push('');
+      }
 
-    return [{ type: 'text', text: lines.join('\n') }];
-  },
-});
+      if (result.images.length > 0) {
+        lines.push(`## Images (${result.images.length}) — captions are CPSC source text`);
+        for (const img of result.images) {
+          lines.push(`- ${markdownImage(img.caption, img.url)}`);
+          lines.push(asSourceText(img.caption));
+          lines.push('');
+        }
+      }
+
+      if (result.coordinated_recalls.length > 0) {
+        lines.push('## Coordinated Recalls');
+        for (const url of result.coordinated_recalls) {
+          lines.push(`- ${markdownLink(url, url)}`);
+        }
+        lines.push('');
+      }
+
+      if (result.data_quality_notes.length > 0) {
+        lines.push('## Data quality (server-assessed)');
+        for (const note of result.data_quality_notes) {
+          lines.push(`- ${note}`);
+        }
+        lines.push('');
+      }
+
+      lines.push(markdownLink('View official CPSC recall page', result.cpsc_url));
+      lines.push(`Source: ${result.source_note}`);
+      lines.push(`CPSC jurisdiction: ${result.cpsc_jurisdiction}`);
+
+      return [{ type: 'text', text: lines.join('\n') }];
+    },
+  });
+}
+
+/** Default-on tool definition for discovery and standalone callers. */
+export const cpscGetRecall = createCpscGetRecall(true);

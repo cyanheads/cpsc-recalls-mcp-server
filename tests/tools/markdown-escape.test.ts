@@ -197,9 +197,21 @@ describe('escapeMarkdown', () => {
       `${'https://x.com/a* '.repeat((n - 2) / 17)}\ny`,
     'line breaks through the whole input': (n) => '  \r\n'.repeat(n / 4),
   };
+  const minLength = 5_000;
+  const maxLength = 320_000;
   for (const [shape, make] of Object.entries(adversarial)) {
-    it(`runs in linear time on ${shape}`, () => {
-      expect(timeDoubling(make, escapeMarkdown)).toBeLessThan(256);
+    describe(shape, () => {
+      // Give each independent measurement its own wall-clock deadline.
+      for (let length = minLength; length <= maxLength; length *= 2) {
+        it(`stays within the per-call budget at ${length} characters`, () => {
+          measureEscapeMs(make(length), length);
+        });
+      }
+      it(`runs in linear time from ${minLength} to ${maxLength} characters`, () => {
+        const smallMs = measureEscapeMs(make(minLength), minLength);
+        const largeMs = measureEscapeMs(make(maxLength), maxLength);
+        expect(largeMs / smallMs).toBeLessThan(256);
+      });
     });
   }
 });
@@ -224,19 +236,14 @@ function perCallMs(run: (input: string) => unknown, input: string): number {
   return elapsedMs / calls;
 }
 
-/**
- * Times `run` on `make(n)` for n doubling from 5,000 to 320,000 characters, asserting each
- * size's best-of-three per-call time against an absolute bound (1 ms per 1,600 characters)
- * before timing the next, and returns the 320,000 ÷ 5,000 time ratio.
- */
-function timeDoubling(make: (length: number) => string, run: (input: string) => unknown): number {
-  const times: number[] = [];
-  for (let length = 5_000; length <= 320_000; length *= 2) {
-    const input = make(length);
-    perCallMs(run, input);
-    const ms = Math.min(perCallMs(run, input), perCallMs(run, input), perCallMs(run, input));
-    expect(ms, `${length} characters`).toBeLessThan(length / 1_600);
-    times.push(ms);
-  }
-  return times.at(-1)! / times[0]!;
+/** Warm the input, then check the fastest of three samples against the per-call bound. */
+function measureEscapeMs(input: string, length: number): number {
+  perCallMs(escapeMarkdown, input);
+  const ms = Math.min(
+    perCallMs(escapeMarkdown, input),
+    perCallMs(escapeMarkdown, input),
+    perCallMs(escapeMarkdown, input),
+  );
+  expect(ms, `${length} characters`).toBeLessThan(length / 1_600);
+  return ms;
 }

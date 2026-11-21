@@ -7,7 +7,10 @@ import { type HandlerContext, type ReasonOf, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
+import {
+  cpscGetRecent,
+  createCpscGetRecent,
+} from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
 
 const makeRaw = (overrides?: Record<string, unknown>) => ({
   RecallID: 1,
@@ -440,295 +443,131 @@ describe('cpsc_get_recent', () => {
       );
     });
   });
-  describe('response size budget', () => {
-    const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
-    /** Records whose hazard text alone is `size` characters, sized to cross the budget in bulk. */
-    const heavyRaws = (count: number, size = 2_000) =>
-      Array.from({ length: count }, (_, i) =>
-        makeRaw({
-          RecallNumber: String(40000 + i),
-          Hazards: [{ Name: `Fire hazard ${'x'.repeat(size)}`, HazardType: '', HazardTypeID: '' }],
-        }),
-      );
-    type Page = {
-      recalls: Array<{ recall_number: string }>;
+  it('returns the entire matching set when it fits in the page cap', async () => {
+    const matches = Array.from({ length: 575 }, (_, i) =>
+      makeRaw({
+        RecallNumber: String(i),
+        Hazards: [{ Name: 'x'.repeat(2_000), HazardType: '', HazardTypeID: '' }],
+      }),
+    );
+    mockGetRecent.mockResolvedValueOnce(matches);
+    const result = await runToolContract(cpscGetRecent, { days: 365, limit: 10_000 });
+    const page = result.structuredContent as {
+      recalls: unknown[];
+      total_found: number;
       has_more: boolean;
-      truncated: boolean;
       notice?: string;
     };
-
-    it('cuts a page at the 64,000-byte budget on both surfaces and names the next offset', async () => {
-      mockGetRecent.mockResolvedValueOnce(heavyRaws(60));
-      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100 });
-      const sc = result.structuredContent as Page;
-      const returned = sc.recalls.length;
-
-      expect(returned).toBeGreaterThan(0);
-      expect(returned).toBeLessThan(60);
-      expect(sc.has_more).toBe(true);
-      expect(sc.truncated).toBe(true);
-      expect(utf8(JSON.stringify(sc))).toBeLessThanOrEqual(64_000);
-      expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
-      expect(utf8(JSON.stringify(sc))).toBeGreaterThan(64_000 - 3_000);
-      expect(sc.notice).toContain(`Returned ${returned} of the 100 requested recalls`);
-      expect(sc.notice).toContain(`offset ${returned}`);
-      expect(wireText(result)).toContain(`> ${sc.notice}`);
-    });
-
-    it('continues from the emitted offset with no gap or overlap', async () => {
-      const all = heavyRaws(60);
-      const seen: string[] = [];
-      let offset = 0;
-      for (let page = 0; page < 10; page++) {
-        mockGetRecent.mockResolvedValueOnce(all);
-        const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100, offset });
-        const sc = result.structuredContent as Page;
-        expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
-        expect(sc.truncated).toBe(sc.has_more);
-        seen.push(...sc.recalls.map((r) => r.recall_number));
-        if (!sc.has_more) break;
-        offset += sc.recalls.length;
-      }
-
-      expect(seen).toEqual(all.map((r) => r.RecallNumber));
-    });
-
-    /** Each record's hazard is 2,000 asterisks: 2,000 bytes of JSON, 4,000 once escaped. */
-    it('charges the budget for the escaped bytes it emits', async () => {
-      mockGetRecent.mockResolvedValueOnce(
-        Array.from({ length: 60 }, (_, i) =>
-          makeRaw({
-            RecallNumber: String(40000 + i),
-            Hazards: [{ Name: '*'.repeat(2_000), HazardType: '', HazardTypeID: '' }],
-          }),
-        ),
-      );
-      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 100 });
-      const text = wireText(result);
-
-      expect(text).toContain(`Hazard: ${'\\*'.repeat(2_000)}  |`);
-      expect(utf8(text)).toBeLessThanOrEqual(64_000);
-      expect(utf8(text)).toBeGreaterThan(64_000 - 5_000);
-      expect(utf8(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(64_000);
-    });
-
-    it('returns a record larger than the budget alone, never an empty page or an error', async () => {
-      mockGetRecent.mockResolvedValueOnce(heavyRaws(2, 70_000));
-      const result = await runToolContract(cpscGetRecent, { days: 30 });
-      const sc = result.structuredContent as Page;
-
-      expect(result.isError).toBeFalsy();
-      expect(sc.recalls).toHaveLength(1);
-      expect(sc.has_more).toBe(true);
-      expect(sc.notice).toContain('offset 1');
-    });
-
-    it('leaves a default-limit page of typical records whole, with no notice', async () => {
-      mockGetRecent.mockResolvedValueOnce(
-        Array.from({ length: 30 }, (_, i) => makeRaw({ RecallNumber: String(41000 + i) })),
-      );
-      const result = await runToolContract(cpscGetRecent, { days: 30 });
-      const sc = result.structuredContent as Page;
-
-      expect(sc.recalls).toHaveLength(20);
-      expect(sc.notice).toBeUndefined();
-    });
+    expect(page.total_found).toBe(matches.length);
+    expect(page.recalls).toHaveLength(matches.length);
+    expect(page.has_more).toBe(false);
+    expect(page.notice).toBeUndefined();
+    expect(wireText(result)).toContain('[574]');
   });
 
-  /**
-   * A limit above the 100-recall page ceiling, up to the 10,000 hard ceiling, is served as
-   * 100. The ceiling notice appears only on a page the ceiling ended.
-   */
-  describe('oversized limit', () => {
-    const utf8 = (text: string) => Buffer.byteLength(text, 'utf8');
-    const CEILING_TEXT = 'a page holds at most';
-    const raws = (count: number, hazardBytes = 0) =>
-      Array.from({ length: count }, (_, i) =>
-        makeRaw({
-          RecallNumber: String(50000 + i),
-          Hazards: [
-            { Name: `Fire hazard ${'x'.repeat(hazardBytes)}`, HazardType: '', HazardTypeID: '' },
-          ],
-        }),
-      );
+  describe('count-based paging', () => {
     type Page = {
-      recalls: Array<{ recall_number: string }>;
-      total_found: number;
-      offset: number;
+      recalls: { recall_number: string }[];
       has_more: boolean;
       truncated: boolean;
       notice?: string;
+      offset: number;
+      total_found: number;
     };
-    const numbers = (list: ReadonlyArray<{ RecallNumber: string }>) =>
-      list.map((raw) => raw.RecallNumber);
+    const criteria = { days: 365 };
 
-    it('keeps rejecting limit 0, negative, fractional, and above 10,000, and days above 365', async () => {
-      const rejected = [
-        { limit: 0 },
-        { limit: -1 },
-        { limit: 1.5 },
-        { limit: 10_001 },
-        { days: 366, limit: 500 },
-      ];
-      for (const args of rejected) {
-        const result = await runToolContract(cpscGetRecent, args);
-        expect({ args, isError: result.isError }).toEqual({ args, isError: true });
-        expect(result.structuredContent).toMatchObject({
-          error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
-        });
-      }
+    it.each([0, -1, 1.5])('rejects invalid limit %s before fetching', async (limit) => {
+      const result = await runToolContract(cpscGetRecent, { ...criteria, limit });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+      });
+      expect(wireText(result)).toContain('invalid_arguments');
       expect(mockGetRecent).not.toHaveBeenCalled();
     });
 
-    it('accepts limit 101 through 10,000 and advertises maximum 10000', async () => {
-      for (const limit of [101, 500, 10_000]) {
-        mockGetRecent.mockResolvedValueOnce([makeRaw()]);
-        const result = await runToolContract(cpscGetRecent, { limit });
-        expect({ limit, isError: result.isError ?? false }).toEqual({ limit, isError: false });
-      }
-      const { properties } = z.toJSONSchema(cpscGetRecent.input) as {
-        properties: Record<string, { minimum?: number; maximum?: number }>;
-      };
-      expect(properties.limit).toMatchObject({ minimum: 1, maximum: 10_000 });
-      expect(properties.days).toMatchObject({ minimum: 1, maximum: 365 });
+    it('advertises a positive integer with default 20 and no maximum in clamp mode', () => {
+      const limit = z.toJSONSchema(cpscGetRecent.input.shape.limit);
+      expect(limit).toMatchObject({ type: 'integer', minimum: 1, default: 20 });
+      expect(limit).not.toHaveProperty('maximum');
     });
 
-    it('serves 100 records with the ceiling notice on both surfaces when the ceiling ends the page', async () => {
-      mockGetRecent.mockResolvedValueOnce(raws(150));
-      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
-      const sc = result.structuredContent as Page;
-      const text = wireText(result);
-
-      expect(sc.recalls.map((r) => r.recall_number)).toEqual(numbers(raws(100)));
-      expect(sc).toMatchObject({
-        total_found: 150,
-        offset: 0,
-        has_more: true,
-        truncated: true,
-        notice:
-          'Returned 100 of the 500 requested recalls: a page holds at most 100 recalls. Continue with offset 100 for the rest.',
+    it('advertises and enforces the cap when clamp mode is disabled', async () => {
+      const bounded = createCpscGetRecent(false);
+      expect(z.toJSONSchema(bounded.input.shape.limit)).toMatchObject({
+        type: 'integer',
+        minimum: 1,
+        maximum: 1000,
+        default: 20,
       });
-      expect(text).toContain(`> ${sc.notice}`);
-      expect(text).toContain('Found 150 recalls, showing 100 from offset 0 (truncated).');
-      expect(text).toContain('More available — repeat with offset 100.');
-
-      mockGetRecent.mockResolvedValueOnce(raws(150));
-      const rest = await runToolContract(cpscGetRecent, { days: 365, limit: 500, offset: 100 });
-      const restSc = rest.structuredContent as Page;
-
-      expect(restSc.recalls.map((r) => r.recall_number)).toEqual(numbers(raws(150).slice(100)));
-      expect(restSc).toMatchObject({ has_more: false, truncated: false });
-      expect(restSc).not.toHaveProperty('notice');
-      expect(wireText(rest)).not.toContain(CEILING_TEXT);
+      expect(bounded.input.parse({ ...criteria, limit: 1000 }).limit).toBe(1000);
+      const result = await runToolContract(bounded, { ...criteria, limit: 1001 });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+      });
+      expect(wireText(result)).toContain('invalid_arguments');
+      expect(mockGetRecent).not.toHaveBeenCalled();
     });
 
-    it('returns a prefix of the limit-100 window, with paging state that matches the records returned', async () => {
-      for (const list of [raws(150), raws(60, 2_000)]) {
-        mockGetRecent.mockResolvedValueOnce(list);
-        const atCeiling = (await runToolContract(cpscGetRecent, { limit: 100 }))
-          .structuredContent as Page;
+    it.each([10_000, 10_001, 1e20])(
+      'pages consecutively under oversized limit %s',
+      async (limit) => {
+        const all = Array.from({ length: 2003 }, (_, i) => makeRaw({ RecallNumber: String(i) }));
+        mockGetRecent.mockResolvedValue(all);
+        const seen: string[] = [];
+        let offset = 0;
+        for (const [count, hasMore] of [
+          [1000, true],
+          [1000, true],
+          [3, false],
+        ] as const) {
+          const result = await runToolContract(cpscGetRecent, { ...criteria, limit, offset });
+          const page = result.structuredContent as Page;
+          const text = wireText(result);
+          expect(page.recalls).toHaveLength(count);
+          expect(page).toMatchObject({
+            offset,
+            total_found: all.length,
+            has_more: hasMore,
+            truncated: hasMore,
+          });
+          expect(text).toContain(`[${offset}]`);
+          expect(text).toContain(`[${offset + count - 1}]`);
+          seen.push(...page.recalls.map((row) => row.recall_number));
+          offset += count;
 
-        for (const limit of [101, 500, 10_000]) {
-          mockGetRecent.mockResolvedValueOnce(list);
-          const sc = (await runToolContract(cpscGetRecent, { limit })).structuredContent as Page;
-          const returned = sc.recalls.length;
-
-          expect(sc.total_found).toBe(atCeiling.total_found);
-          expect(sc.offset).toBe(0);
-          expect(returned).toBeGreaterThan(0);
-          expect(returned).toBeLessThanOrEqual(100);
-          expect(sc.recalls).toEqual(atCeiling.recalls.slice(0, returned));
-          expect(sc.has_more).toBe(returned < sc.total_found);
-          expect(sc.truncated).toBe(sc.has_more);
-          expect(sc.notice).toContain(`Continue with offset ${returned} for the rest.`);
+          if (hasMore) {
+            const notice = `Returned 1000 of the ${limit} requested recalls: a page holds at most 1000 recalls. Continue with offset ${offset} for the rest.`;
+            expect(page.notice).toBe(notice);
+            expect(text).toContain(notice);
+          } else {
+            expect(page.notice).toBeUndefined();
+            expect(text).not.toContain('a page holds at most');
+          }
         }
-      }
-    });
 
-    it('names the caller limit on a budget-cut page and carries no ceiling text', async () => {
-      mockGetRecent.mockResolvedValueOnce(raws(60, 2_000));
-      const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
-      const sc = result.structuredContent as Page;
-      const returned = sc.recalls.length;
+        expect(seen).toEqual(all.map((row) => row.RecallNumber));
+        const exhausted = await runToolContract(cpscGetRecent, { ...criteria, limit, offset });
+        expect(exhausted.structuredContent).toMatchObject({
+          recalls: [],
+          offset,
+          has_more: false,
+          truncated: false,
+        });
+        const notice = (exhausted.structuredContent as Page).notice;
+        expect(notice).toContain('so this page is empty');
+        expect(wireText(exhausted)).toContain(notice!);
+      },
+    );
+  });
 
-      expect(returned).toBeLessThan(60);
-      expect(sc.notice).toBe(
-        `Returned ${returned} of the 500 requested recalls: this page reached the 64,000-byte response size budget. Continue with offset ${returned} for the rest.`,
-      );
-      expect(wireText(result)).not.toContain(CEILING_TEXT);
-      expect(utf8(JSON.stringify(sc))).toBeLessThanOrEqual(64_000);
-      expect(utf8(wireText(result))).toBeLessThanOrEqual(64_000);
-    });
-
-    it('returns every recall with no notice when all of them fit', async () => {
-      mockGetRecent.mockResolvedValueOnce(raws(13));
-      const result = await runToolContract(cpscGetRecent, { limit: 500 });
-      const sc = result.structuredContent as Page;
-
-      expect(sc.recalls).toHaveLength(13);
-      expect(sc).toMatchObject({ has_more: false, truncated: false });
-      expect(sc).not.toHaveProperty('notice');
-    });
-
-    it('gives empty-window and offset-past-end pages exactly the notice they carry at limit 100', async () => {
-      const cases: Array<[Record<string, unknown>, unknown[]]> = [
-        [{ days: 7 }, []],
-        [{ days: 7, offset: 50 }, [makeRaw()]],
-      ];
-      for (const [args, list] of cases) {
-        const notices: Array<string | undefined> = [];
-        for (const limit of [100, 500]) {
-          mockGetRecent.mockResolvedValueOnce(list);
-          const result = await runToolContract(cpscGetRecent, { ...args, limit });
-          notices.push((result.structuredContent as Page).notice);
-        }
-        expect(notices[0]).toBeDefined();
-        expect(notices[1]).toBe(notices[0]);
-      }
-    });
-
-    /**
-     * One record's hazard grows a few bytes per step, so the 100-record page walks up to the
-     * budget and past it: every page that carries the ceiling notice must still fit.
-     */
-    it('keeps each surface within the budget on every page that carries the ceiling notice', async () => {
-      const base = raws(150, 370);
-      const run = async (pad: number) => {
-        mockGetRecent.mockResolvedValueOnce([
-          makeRaw({
-            RecallNumber: '50000',
-            Hazards: [
-              { Name: `Fire hazard ${'x'.repeat(370 + pad)}`, HazardType: '', HazardTypeID: '' },
-            ],
-          }),
-          ...base.slice(1),
-        ]);
-        const result = await runToolContract(cpscGetRecent, { days: 365, limit: 500 });
-        const sc = result.structuredContent as Page;
-        return { sc, bytes: Math.max(utf8(JSON.stringify(sc)), utf8(wireText(result))) };
-      };
-      const { sc: first, bytes: start } = await run(0);
-      expect(first.recalls).toHaveLength(100);
-      const notice =
-        'Returned 100 of the 500 requested recalls: a page holds at most 100 recalls. Continue with offset 100 for the rest.';
-      let largestCeilingPage = 0;
-      let budgetCut = false;
-      for (let pad = Math.max(0, 64_000 - start - 600); pad <= 64_000 - start + 100; pad += 3) {
-        const { sc, bytes } = await run(pad);
-        expect({ pad, fits: bytes <= 64_000 }).toEqual({ pad, fits: true });
-        if (sc.recalls.length === 100) {
-          expect(sc.notice).toBe(notice);
-          largestCeilingPage = Math.max(largestCeilingPage, bytes);
-        } else {
-          budgetCut = true;
-          expect(sc.notice).toContain('response size budget');
-        }
-      }
-      expect(budgetCut).toBe(true);
-      /** The fullest ceiling page sits within the notice's own size of the budget, so reserving it is what kept the page under. */
-      expect(largestCeilingPage).toBeGreaterThan(64_000 - utf8(notice));
-    });
-
+  /**
+   * The wire envelope both client families read: `structuredContent` and the
+   * `content[]` text channel must carry the same facts on success, and the same
+   * reason plus recovery hint on failure.
+   */
+  describe('wire contract', () => {
     /** Search rows gained last_updated and distributors; the recent feed's rows did not. */
     it('keeps the recent row fields unchanged', async () => {
       mockGetRecent.mockResolvedValueOnce([
@@ -754,14 +593,7 @@ describe('cpsc_get_recent', () => {
       expect(wireText(result)).not.toContain('Northwind');
       expect(wireText(result)).not.toContain('2026-01-02');
     });
-  });
 
-  /**
-   * The wire envelope both client families read: `structuredContent` and the
-   * `content[]` text channel must carry the same facts on success, and the same
-   * reason plus recovery hint on failure.
-   */
-  describe('wire contract', () => {
     it('carries the feed on structuredContent and in the text channel', async () => {
       mockGetRecent.mockResolvedValueOnce([makeRaw()]);
       const result = await runToolContract(cpscGetRecent, { days: 7, limit: 5 });

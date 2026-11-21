@@ -73,6 +73,8 @@ export class CpscRecallService {
         RecallTitle: params.RecallTitle,
         RecallDescription: params.RecallDescription,
         Remedy: params.Remedy,
+        RemedyOption: params.RemedyOption,
+        Injury: params.Injury,
         RecallDateStart: params.RecallDateStart,
         RecallDateEnd: params.RecallDateEnd,
         LastPublishDateStart: params.LastPublishDateStart,

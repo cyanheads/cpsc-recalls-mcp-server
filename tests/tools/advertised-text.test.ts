@@ -10,7 +10,10 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
+import {
+  cpscGetRecall,
+  createCpscGetRecall,
+} from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
 import { cpscGetRecent } from '@/mcp-server/tools/definitions/cpsc-get-recent.tool.js';
 import { cpscSearchRecalls } from '@/mcp-server/tools/definitions/cpsc-search-recalls.tool.js';
 
@@ -163,21 +166,25 @@ describe('advertised text', () => {
       expect(text).toContain('"batter" finds battery and batteries');
       expect(text).toContain('offset');
       expect(text).toContain('has_more');
-      expect(text).toContain('64,000-byte');
+      expect(text).toContain('a page holds up to 500 recalls');
       expect(text).toContain('CPSC jurisdiction');
     });
 
-    it('says a page can return fewer than limit when the size budget is reached', () => {
-      for (const def of [cpscSearchRecalls, cpscGetRecent]) {
+    it('states each page cap and when a larger limit produces a notice', () => {
+      for (const [def, cap] of [
+        [cpscSearchRecalls, 500],
+        [cpscGetRecent, 1_000],
+      ] as const) {
         const limit = (
           z.toJSONSchema(def.input).properties as Record<string, { description: string }>
         ).limit;
-        expect(limit?.description).toContain('64,000-byte');
+        expect(limit?.description).toContain(`A page holds at most ${cap} recalls`);
+        expect(limit?.description).toContain('with a notice when more recalls remain');
       }
     });
 
     /**
-     * A budget-cut page returns fewer than limit, so stepping offset by limit skips records;
+     * A capped page returns fewer than limit, so stepping offset by limit skips records;
      * the offset guidance must step by the count the previous page returned.
      */
     it('pages offset by the number returned, never by a fixed limit step', () => {
@@ -335,7 +342,11 @@ describe('advertised text', () => {
         error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
       });
       const { properties } = z.toJSONSchema(cpscGetRecall.input);
-      expect(properties?.recall_number).toMatchObject({ pattern: '^\\d{5}([a-d])?$' });
+      expect(properties?.recall_number).toMatchObject({
+        pattern: '^\\s*\\d{2}-?\\d{3}[a-dA-D]?\\s*$',
+      });
+      const { properties: strictProperties } = z.toJSONSchema(createCpscGetRecall(false).input);
+      expect(strictProperties?.recall_number).toMatchObject({ pattern: '^\\d{5}([a-d])?$' });
     });
 
     it('names both accepted forms and the tools that return recall numbers, not the raw regex', async () => {

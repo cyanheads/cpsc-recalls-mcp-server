@@ -14,7 +14,9 @@
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
-        "NODE_ENV": "production"
+        "NODE_ENV": "production",
+        "CPSC_CLAMP_LIMITS": "${user_config.CPSC_CLAMP_LIMITS}",
+        "CPSC_NORMALIZE_RECALL_NUMBERS": "${user_config.CPSC_NORMALIZE_RECALL_NUMBERS}"
       }
     }
   },
@@ -23,5 +25,18 @@
   },
   "tools_generated": true,
   "prompts_generated": true,
-  "user_config": {}
+  "user_config": {
+    "CPSC_CLAMP_LIMITS": {
+      "type": "boolean",
+      "title": "Clamp page limits",
+      "description": "Accept a larger limit and serve up to 500 search or 1,000 recent recalls per page.",
+      "default": true
+    },
+    "CPSC_NORMALIZE_RECALL_NUMBERS": {
+      "type": "boolean",
+      "title": "Accept printed recall numbers",
+      "description": "Accept the optional hyphen from CPSC recall pages, surrounding whitespace, and uppercase suffixes.",
+      "default": true
+    }
+  }
 }

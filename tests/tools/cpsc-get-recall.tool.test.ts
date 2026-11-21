@@ -7,7 +7,10 @@ import type { HandlerContext, ReasonOf } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cpscGetRecall } from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
+import {
+  cpscGetRecall,
+  createCpscGetRecall,
+} from '@/mcp-server/tools/definitions/cpsc-get-recall.tool.js';
 
 const makeRaw = (overrides?: Record<string, unknown>) => ({
   RecallID: 1,
@@ -86,6 +89,12 @@ vi.mock('@/services/cpsc-recall/cpsc-recall-service.js', () => ({
   initCpscRecallService: vi.fn(),
 }));
 
+const { countNormalization } = vi.hoisted(() => ({ countNormalization: vi.fn() }));
+vi.mock('@cyanheads/mcp-ts-core/utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@cyanheads/mcp-ts-core/utils')>()),
+  createCounter: () => ({ add: countNormalization }),
+}));
+
 import { getCpscRecallService } from '@/services/cpsc-recall/cpsc-recall-service.js';
 
 /** The tool's declared error contract types the `ctx` its handler receives. */
@@ -111,6 +120,7 @@ describe('cpsc_get_recall', () => {
     ctx = createMockContext({ errors: cpscGetRecall.errors });
     vi.mocked(getCpscRecallService).mockReturnValue({ getByNumber: mockGetByNumber } as never);
     mockGetByNumber.mockReset();
+    countNormalization.mockClear();
   });
 
   it('returns full normalized recall', async () => {
@@ -219,16 +229,33 @@ describe('cpsc_get_recall', () => {
       expect(() => cpscGetRecall.output.parse(result)).not.toThrow();
     });
 
-    it('notes the absence for both the null and empty-string forms', async () => {
-      for (const Description of [null, '']) {
-        mockGetByNumber.mockResolvedValueOnce(found({ Description }));
-        const input = cpscGetRecall.input.parse({ recall_number: '25043' });
-        const result = await cpscGetRecall.handler(input, ctx);
+    it.each([
+      { RecallNumber: '04084', Description: null },
+      { RecallNumber: '04505', Description: '' },
+      { RecallNumber: '25043', Description: '   ' },
+    ])('preserves absent description text for $RecallNumber', async (record) => {
+      const model = 'Ariens Sno-Throw, Model 924506';
+      mockGetByNumber.mockResolvedValueOnce(
+        found({
+          ...record,
+          Products: [{ Name: model }],
+          Images: [{ URL: 'https://example.com/img.jpg', Caption: model }],
+        }),
+      );
+      const result = await runToolContract(cpscGetRecall, { recall_number: record.RecallNumber });
+      const note =
+        'CPSC published no description text for this recall. Check the product names, image captions, and official CPSC recall page for model numbers.';
 
-        expect(result.data_quality_notes).toContain(
-          'CPSC published no description text for this recall, so product identification details (including model numbers) are unavailable here.',
-        );
-      }
+      expect(result.structuredContent).toMatchObject({
+        description: record.Description,
+        products: [{ name: model }],
+        images: [{ caption: model }],
+        data_quality_notes: [note],
+      });
+      const text = wireText(result);
+      expect(text).toContain(note);
+      expect(text).toContain(model);
+      expect(text).not.toMatch(/(?:are|often appear) in the description below/);
     });
 
     it('renders a visible placeholder instead of a blank Description section', () => {
@@ -245,6 +272,7 @@ describe('cpsc_get_recall', () => {
 
       expect(text).toContain('## Description (CPSC source text)');
       expect(text).toContain('> Line one.\n> Line two.');
+      expect(text).toContain('Model numbers often appear in the description below.');
     });
   });
 
@@ -338,7 +366,7 @@ describe('cpsc_get_recall', () => {
       expect(text).toContain('## Incidents / Injuries (CPSC source text)\n> None reported');
       expect(text).toContain('**Contact (CPSC source text):**\n> Call 1-800-555-1234');
       // Server-authored guidance stays outside the quoted blocks.
-      expect(text).toContain('Model numbers are in the description below if not listed here.');
+      expect(text).toContain('Model numbers often appear in the description below.');
     });
 
     it('separates every quoted block from the guidance that follows it', () => {
@@ -473,6 +501,113 @@ describe('cpsc_get_recall', () => {
    * reason plus recovery hint on failure.
    */
   describe('wire contract', () => {
+    it.each([
+      ['25-036', '25036'],
+      [' 25036 ', '25036'],
+      ['25036', '25036'],
+      ['99003A', '99003a'],
+      ['99-003a', '99003a'],
+    ])('looks up %j as %s', async (recall_number, canonical) => {
+      mockGetByNumber.mockResolvedValueOnce(found({ RecallNumber: canonical }));
+      const result = await runToolContract(cpscGetRecall, { recall_number });
+
+      expect(result.structuredContent).toMatchObject({ recall_number: canonical });
+      expect(wireText(result)).toContain(`[${canonical}]`);
+      expect(mockGetByNumber).toHaveBeenCalledExactlyOnceWith(canonical, expect.any(Object));
+    });
+
+    it.each(['25_036', '25/036', '25- 036', '2503', '250361', '99003e'])(
+      'rejects malformed recall number %j before lookup',
+      async (recall_number) => {
+        const result = await runToolContract(cpscGetRecall, { recall_number });
+        const expectedForm = '"25043" or "25-043"';
+
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.InvalidParams,
+            data: {
+              reason: 'invalid_arguments',
+              recovery: { hint: expect.stringContaining(expectedForm) },
+            },
+          },
+        });
+        expect(wireText(result)).toContain(expectedForm);
+        expect(mockGetByNumber).not.toHaveBeenCalled();
+        expect(countNormalization).not.toHaveBeenCalled();
+      },
+    );
+
+    it('normalizes a bare family base once and relays the exact-lookup recovery hint', async () => {
+      mockGetByNumber.mockResolvedValueOnce({
+        recall: null,
+        otherNumbers: ['99003a', '99003b'],
+      });
+      const result = await runToolContract(cpscGetRecall, { recall_number: '99-003' });
+      const hint = '99003a, 99003b are separate recalls';
+
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          data: { reason: 'not_found', recovery: { hint: expect.stringContaining(hint) } },
+        },
+      });
+      expect(wireText(result)).toContain(hint);
+      expect(mockGetByNumber).toHaveBeenCalledExactlyOnceWith('99003', expect.any(Object));
+      expect(countNormalization).toHaveBeenCalledExactlyOnceWith(1);
+    });
+
+    it('logs and counts one normalization only when an accepted recall number changes', async () => {
+      const log = vi.spyOn(ctx.log, 'info');
+      mockGetByNumber.mockResolvedValue(found({ RecallNumber: '99003a' }));
+
+      await cpscGetRecall.handler({ recall_number: ' 99-003A ' }, ctx);
+      await cpscGetRecall.handler({ recall_number: '99003a' }, ctx);
+
+      expect(
+        log.mock.calls.filter(([message]) => message === 'Normalized CPSC recall number'),
+      ).toEqual([['Normalized CPSC recall number', { recall_number: '99003a' }]]);
+      expect(countNormalization).toHaveBeenCalledExactlyOnceWith(1);
+    });
+
+    it.each(['25-036', ' 25036 ', '99003A'])(
+      'rejects %j without a lookup or normalization event when normalization is off',
+      async (recall_number) => {
+        const result = await runToolContract(createCpscGetRecall(false), { recall_number });
+
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.InvalidParams,
+            data: { reason: 'invalid_arguments' },
+          },
+        });
+        expect(wireText(result)).toContain('"25043"');
+        expect(wireText(result)).not.toContain('"25-043"');
+        expect(mockGetByNumber).not.toHaveBeenCalled();
+        expect(countNormalization).not.toHaveBeenCalled();
+      },
+    );
+
+    it('still looks up canonical numbers when normalization is off', async () => {
+      mockGetByNumber.mockResolvedValueOnce(found({ RecallNumber: '99003a' }));
+      const result = await runToolContract(createCpscGetRecall(false), {
+        recall_number: '99003a',
+      });
+
+      expect(result.structuredContent).toMatchObject({ recall_number: '99003a' });
+      expect(wireText(result)).toContain('[99003a]');
+      expect(mockGetByNumber).toHaveBeenCalledExactlyOnceWith('99003a', expect.any(Object));
+      expect(countNormalization).not.toHaveBeenCalled();
+    });
+
+    it('still coerces an integer recall number before the exact lookup', async () => {
+      mockGetByNumber.mockResolvedValueOnce(found({ RecallNumber: '25036' }));
+      const result = await runToolContract(cpscGetRecall, { recall_number: 25036 } as never);
+
+      expect(result.structuredContent).toMatchObject({ recall_number: '25036' });
+      expect(wireText(result)).toContain('[25036]');
+      expect(mockGetByNumber).toHaveBeenCalledExactlyOnceWith('25036', expect.any(Object));
+    });
+
     it('settles as cancelled when the upstream resolves after the caller aborts', async () => {
       const controller = new AbortController();
       mockGetByNumber.mockImplementationOnce(async () => {

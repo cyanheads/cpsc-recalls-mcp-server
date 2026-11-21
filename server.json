@@ -22,6 +22,20 @@
       "version": "0.3.1",
       "environmentVariables": [
         {
+          "name": "CPSC_CLAMP_LIMITS",
+          "description": "Serve oversized page requests at the per-tool cap. Set false to reject them.",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "true"
+        },
+        {
+          "name": "CPSC_NORMALIZE_RECALL_NUMBERS",
+          "description": "Accept printed recall numbers with an optional hyphen, surrounding whitespace, and uppercase suffixes.",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "true"
+        },
+        {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
@@ -40,6 +54,20 @@
       "runtimeHint": "npx",
       "version": "0.3.1",
       "environmentVariables": [
+        {
+          "name": "CPSC_CLAMP_LIMITS",
+          "description": "Serve oversized page requests at the per-tool cap. Set false to reject them.",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "true"
+        },
+        {
+          "name": "CPSC_NORMALIZE_RECALL_NUMBERS",
+          "description": "Accept printed recall numbers with an optional hyphen, surrounding whitespace, and uppercase suffixes.",
+          "format": "boolean",
+          "isRequired": false,
+          "default": "true"
+        },
         {
           "name": "MCP_TRANSPORT_TYPE",
           "description": "Selects the HTTP transport.",

@@ -2,8 +2,8 @@
 
 **Server:** cpsc-recalls-mcp-server
 **Version:** 0.3.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0 (protocol revisions 2026-07-28 and 2025-*)
 **Zod:** ^4.6.7
 
@@ -46,11 +46,13 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 The three registered tools live in `src/mcp-server/tools/definitions/`:
 
-- `cpsc-search-recalls.tool.ts` applies text/date filters and offset pagination; its record renderer also supplies the byte-budget calculation.
-- `cpsc-get-recall.tool.ts` expands a recall number into the full record and distinguishes quoted CPSC narrative from server guidance.
-- `cpsc-get-recent.tool.ts` browses a date window with the same pagination and response-budget contract as search.
+- `cpsc-search-recalls.tool.ts` combines text, date, remedy category, and UPC filters before offset pagination. Incident narrative matches include reports and denials. UPC matches in descriptions require confirmation against the full recall.
+- `cpsc-get-recall.tool.ts` normalizes recall numbers copied from CPSC notices before exact lookup and distinguishes quoted source text from server guidance. If a description is missing, product names and image captions can still identify a model.
+- `cpsc-get-recent.tool.ts` browses a date window with lightweight rows. List pages default to 20 recalls and cap at 500 for search and 1,000 for recent.
 
-All three declare typed error contracts and use `getCpscRecallService()`. The service normalizes CPSC text once before returning records. There are no prompts or server-specific environment variables, and no resource definitions: the only resource is the published skill `skill://cpsc-recalls-guide/SKILL.md`, which the framework serves from root `skills/` (`createApp({ skills: 'skills' })` in `src/index.ts`).
+All three declare typed error contracts and use `getCpscRecallService()`. The service normalizes CPSC text once before returning records. The only resource is the published skill `skill://cpsc-recalls-guide/SKILL.md`, which the framework serves from root `skills/` (`createApp({ skills: 'skills' })` in `src/index.ts`). There are no prompts.
+
+Two optional startup switches in `src/index.ts` select the advertised tool schemas. Both default to `true`. Set `CPSC_CLAMP_LIMITS=false` to enforce the page cap in validation, or `CPSC_NORMALIZE_RECALL_NUMBERS=false` to require canonical recall numbers. Each clamp or changed recall number emits a log and increments a counter.
 
 `skills/cpsc-recalls-guide/SKILL.md` carries what the tool descriptions don't: search-formulation gates (one empty search is not "not recalled"), recall-number and identifier quirks, and the jurisdiction edges. Edit it with the `add-skill` skill, and re-check its gates against live tool behavior with `field-test`.
 
@@ -159,7 +161,7 @@ src/
   index.ts                              # createApp() entry point — registers tools, inits service
   mcp-server/
     tools/
-      response-budget.ts                # List tools' 64,000-byte page budget, 10,000 limit ceiling, short-page notices
+      count-paging.ts                   # List tool limit schemas, offset slicing, and cap notices
       markdown-escape.ts                # Markdown escaping for CPSC text in content[]
       definitions/
         cpsc-search-recalls.tool.ts     # Search recalls by product, org, date
@@ -169,6 +171,7 @@ src/
     cpsc-recall/
       cpsc-recall-service.ts            # CPSC API client (50 s per-call deadline, exact recall-number match), init/accessor
       normalize-text.ts                 # CPSC HTML markup and character codes to plain text
+      remedy-options.ts                 # Canonical CPSC remedy categories and output description
       types.ts                          # Raw API and domain types
 ```
 
@@ -176,7 +179,7 @@ src/
 
 ## Naming
 
-**CPSC prose formatting:** retain `src/mcp-server/tools/markdown-escape.ts` for plain CPSC text, where the framework's CommonMark inline escaper would put a backslash inside an autolinked address. An address GFM autolinks stays bare only when it holds nothing to escape and no escaped `<` follows it; otherwise it renders as `markdownLink(span, href)` over GFM's own link span (href = the span, or `http://` + span for `www.`), with the characters GFM trims from its end escaped after the link (`? ! . , : * _ ~ " '`, an unbalanced `)`, an `&name;` entity, `;` — cmark-gfm's rule). An address GFM doesn't autolink, or whose href isn't `http(s)`, is escaped as text, and a `!` right before a link is escaped. URL fields use the framework's `markdownLink` / `markdownImage`. The enrichment byte reservation in `response-budget.ts` models the framework trailer's rendering — code spans and fenced blocks sized past each value's backtick runs, `> `-quoted notice lines — and needs re-checking whenever the framework changes that trailer.
+**CPSC prose formatting:** retain `src/mcp-server/tools/markdown-escape.ts` for plain CPSC text, where the framework's CommonMark inline escaper would put a backslash inside an autolinked address. An address GFM autolinks stays bare only when it holds nothing to escape and no escaped `<` follows it; otherwise it renders as `markdownLink(span, href)` over GFM's own link span (href = the span, or `http://` + span for `www.`), with the characters GFM trims from its end escaped after the link (`? ! . , : * _ ~ " '`, an unbalanced `)`, an `&name;` entity, `;` — cmark-gfm's rule). An address GFM doesn't autolink, or whose href isn't `http(s)`, is escaped as text, and a `!` right before a link is escaped. URL fields use the framework's `markdownLink` / `markdownImage`.
 
 | What | Convention | Example |
 |:-----|:-----------|:--------|
@@ -278,7 +281,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/` at a package root, and any `SKILL.md` — a runtime directory deeper in a package, such as the MCP SDK's `dist/ext/skills/`, ships); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/`, `CLAUDE.md`, `AGENTS.md`, and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package root, and any `SKILL.md` — a runtime directory deeper in a package, such as the MCP SDK's `dist/ext/skills/`, ships); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/` and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 

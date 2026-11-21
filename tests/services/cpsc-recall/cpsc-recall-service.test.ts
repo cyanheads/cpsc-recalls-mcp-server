@@ -135,6 +135,8 @@ describe('CpscRecallService', () => {
         RecallTitle: 'chandelier',
         RecallDescription: 'overheating',
         Remedy: 'repair',
+        RemedyOption: 'No Remedy Available',
+        Injury: 'death',
         RecallDateStart: '2020-01-01',
         RecallDateEnd: '2021-01-01',
         LastPublishDateStart: '2025-01-01',
@@ -154,6 +156,8 @@ describe('CpscRecallService', () => {
       RecallTitle: 'chandelier',
       RecallDescription: 'overheating',
       Remedy: 'repair',
+      RemedyOption: 'No Remedy Available',
+      Injury: 'death',
       RecallDateStart: '2020-01-01',
       RecallDateEnd: '2021-01-01',
       LastPublishDateStart: '2025-01-01',
@@ -276,6 +280,35 @@ describe('CpscRecallService', () => {
       const query = await upstreamQuery({ title_search: '😀'.repeat(250) });
 
       expect(query.RecallTitle).toBe('😀'.repeat(16));
+    });
+
+    it('keeps all predicates within the query limit with long words, both date axes and a remedy option', async () => {
+      const word = 'x'.repeat(500);
+      const query = await upstreamQuery({
+        product_name: word,
+        manufacturer: word,
+        retailer: word,
+        importer: word,
+        distributor: word,
+        title_search: word,
+        description_search: word,
+        remedy: word,
+        injury_search: word,
+        remedy_option: 'No Remedy Available',
+        date_start: '2000-01-01',
+        date_end: '2026-12-31',
+        updated_start: '2000-01-01',
+        updated_end: '2026-12-31',
+      });
+      const search = new URL(String(mockFetch.mock.calls[0]?.[0])).search.slice(1);
+
+      expect(search.length).toBeLessThanOrEqual(2_048);
+      expect(Object.keys(query)).toHaveLength(15);
+      expect(query).toMatchObject({
+        RemedyOption: 'No Remedy Available',
+        RecallTitle: 'x'.repeat(200),
+        Injury: 'x'.repeat(180),
+      });
     });
 
     it('relays a CPSC rejection as upstream_rejected on both surfaces, in behavioral terms', async () => {

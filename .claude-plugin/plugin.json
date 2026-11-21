@@ -20,12 +20,28 @@
     "consumer-product-safety",
     "product-safety"
   ],
+  "userConfig": {
+    "CPSC_CLAMP_LIMITS": {
+      "type": "boolean",
+      "title": "Clamp page limits",
+      "description": "Accept a larger limit and serve up to 500 search or 1,000 recent recalls per page.",
+      "default": true
+    },
+    "CPSC_NORMALIZE_RECALL_NUMBERS": {
+      "type": "boolean",
+      "title": "Accept printed recall numbers",
+      "description": "Accept the optional hyphen from CPSC recall pages, surrounding whitespace, and uppercase suffixes.",
+      "default": true
+    }
+  },
   "mcpServers": {
     "cpsc-recalls-mcp-server": {
       "command": "npx",
       "args": ["-y", "@cyanheads/cpsc-recalls-mcp-server"],
       "env": {
-        "MCP_TRANSPORT_TYPE": "stdio"
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "CPSC_CLAMP_LIMITS": "${user_config.CPSC_CLAMP_LIMITS}",
+        "CPSC_NORMALIZE_RECALL_NUMBERS": "${user_config.CPSC_NORMALIZE_RECALL_NUMBERS}"
       }
     }
   }

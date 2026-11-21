@@ -1,6 +1,6 @@
 # cpsc-recalls-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 13:37:15
+Generated on: 2026-11-21 17:50:27
 
 ```text
 cpsc-recalls-mcp-server/
@@ -152,12 +152,13 @@ cpsc-recalls-mcp-server/
 │   │       │   ├── cpsc-get-recall.tool.ts
 │   │       │   ├── cpsc-get-recent.tool.ts
 │   │       │   └── cpsc-search-recalls.tool.ts
-│   │       ├── markdown-escape.ts
-│   │       └── response-budget.ts
+│   │       ├── count-paging.ts
+│   │       └── markdown-escape.ts
 │   ├── services/
 │   │   └── cpsc-recall/
 │   │       ├── cpsc-recall-service.ts
 │   │       ├── normalize-text.ts
+│   │       ├── remedy-options.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
@@ -171,12 +172,13 @@ cpsc-recalls-mcp-server/
 │   │       └── normalize-text.test.ts
 │   ├── tools/
 │   │   ├── advertised-text.test.ts
+│   │   ├── count-paging.test.ts
 │   │   ├── cpsc-get-recall.tool.test.ts
 │   │   ├── cpsc-get-recent.tool.test.ts
+│   │   ├── cpsc-search-recalls-filters.test.ts
 │   │   ├── cpsc-search-recalls.tool.test.ts
 │   │   ├── markdown-escape.test.ts
-│   │   ├── markdown-rendering.test.ts
-│   │   └── response-budget.test.ts
+│   │   └── markdown-rendering.test.ts
 │   └── linear-time.ts
 ├── .dockerignore
 ├── .env.example

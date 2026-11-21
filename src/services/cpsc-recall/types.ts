@@ -58,6 +58,8 @@ export interface CpscSearchParams {
   /** Substring match against `Distributors[].Name`. */
   Distributor?: string;
   Importer?: string;
+  /** Substring match against the incident narrative in `Injuries[].Name`. */
+  Injury?: string;
   /** Upper bound on `LastPublishDate` — a separate axis from `RecallDate`. */
   LastPublishDateEnd?: string;
   /** Lower bound on `LastPublishDate` — a separate axis from `RecallDate`. */
@@ -77,5 +79,7 @@ export interface CpscSearchParams {
    * 1,557 records carry `Repair` in `RemedyOptions`.
    */
   Remedy?: string;
+  /** Substring match against the source classification in `RemedyOptions[].Option`. */
+  RemedyOption?: string;
   Retailer?: string;
 }
